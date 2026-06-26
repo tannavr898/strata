@@ -1,0 +1,33 @@
+# Strata — pinned-ish dependency set.
+# Philosophy: keep the core lean. Only the libraries needed for the data/ML
+# product itself. Anything "heavy" (GIS stacks, R bridges) is intentionally
+# NOT here yet — we will discuss before adding it (see README "Dependencies").
+
+# --- Core data handling ---
+pandas>=2.0,<3.0          # tidy DataFrames, the analysis table, joins on (county, year)
+numpy>=1.24,<3.0          # numeric backbone for pandas / sklearn
+
+# --- Machine learning ---
+scikit-learn>=1.3,<2.0    # RandomForest models, CV, permutation_importance, metrics
+
+# --- I/O and config ---
+requests>=2.31,<3.0       # HTTP client for the NASS Quick Stats REST API (and later SDA/Daymet)
+PyYAML>=6.0,<7.0          # source-agnostic loader config (config/sources.yaml)
+python-dotenv>=1.0,<2.0   # read the NASS API key from a local .env (keep secrets out of git)
+truststore>=0.9,<1.0      # validate TLS against the OS trust store (pure-Python). Needed
+                          #   because local AV (Norton) HTTPS-inspects traffic and re-signs
+                          #   certs with a root that lives in the Windows store, not certifi.
+                          #   This keeps verification ON (secure) instead of disabling it.
+
+# --- Reporting / inspection ---
+matplotlib>=3.7,<4.0      # confusion matrix + diagnostic plots for the soil classifier / yield model
+
+# -----------------------------------------------------------------------------
+# DELIBERATELY DEFERRED (ask before adding — these are the "heavy" deps):
+#   - SSURGO/SDA: plain `requests` against the SDA POST endpoint avoids a GIS stack.
+#                 Only if we need geometry ops would we add shapely/geopandas/pyproj.
+#   - KSSL pedons: planned as a downloaded SQLite snapshot -> read via stdlib sqlite3
+#                  (no new dep) OR pandas.read_sql. The R `soilDB::fetchKSSL` path
+#                  would need an R install + rpy2 — NOT taken unless you want it.
+#   - Daymet: `requests` against the Single Pixel REST API returns CSV -> pandas.
+# -----------------------------------------------------------------------------

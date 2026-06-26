@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(pip *)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import ssl,socket; ctx=ssl._create_unverified_context\\(\\); s=ctx.wrap_socket\\(socket.create_connection\\(\\('quickstats.nass.usda.gov',443\\),timeout=15\\),server_hostname='quickstats.nass.usda.gov'\\); c=s.getpeercert\\(\\); s.close\\(\\); print\\('SUBJECT:',c.get\\('subject'\\)\\); print\\('ISSUER :',c.get\\('issuer'\\)\\)\" 2>$null)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import truststore\" 2>$null)",
+      "PowerShell(if \\($?\\) { 'truststore present' } else { 'truststore NOT installed' })",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import ssl; d=ssl._ssl._test_decode_cert\\(r'C:\\\\Users\\\\maste\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-maste-VSCode-strata\\\\69ea728d-0234-4560-aeec-2ee2efd0c20b\\\\scratchpad\\\\leaf.pem'\\); print\\('SUBJECT:', d.get\\('subject'\\)\\); print\\('ISSUER :', d.get\\('issuer'\\)\\)\")",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pip install truststore --quiet)"
+    ]
+  }
+}

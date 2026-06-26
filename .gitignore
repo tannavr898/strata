@@ -1,0 +1,24 @@
+# Secrets — the NASS key (and any future keys) live here, never in git.
+.env
+
+# Pulled datasets. Raw source data is reproduced from provenance in the README,
+# not committed. Keep the repo light and avoid redistributing source data.
+data/raw/
+data/processed/
+data/interim/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Notebooks / tooling
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

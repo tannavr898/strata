@@ -1,0 +1,138 @@
+# =============================================================================
+# Strata data-source configuration.
+#
+# WHY this file exists: the planning constraints require loaders that are
+# "source-agnostic via a config". So no query parameters are hard-coded in
+# Python. Each source has: where to reach it, how to authenticate, sane
+# defaults, and one or more *named queries* the loader can pull by name.
+#
+# Nothing here triggers a network call on its own — it is just declarative
+# configuration that data_ingest.py reads.
+# =============================================================================
+
+# Global HTTP/TLS behavior shared by every web-based source (NASS, SDA, Daymet...).
+http:
+  # Validate TLS against the operating-system trust store instead of certifi's
+  # bundle. Required on machines where antivirus/corporate proxies HTTPS-inspect
+  # traffic and re-sign certificates with a private root that is trusted by the
+  # OS but absent from certifi. Verification stays ON either way — we never
+  # disable certificate checking.
+  use_system_trust_store: true
+
+daymet:
+  # Daymet v4 daily 1-km surface weather (ORNL DAAC), Single Pixel REST API.
+  # One query per county centroid returns all daily data; we aggregate to
+  # county-year growing-season features. Citation is in README provenance.
+  base_url: "https://daymet.ornl.gov/single-pixel/api/data"
+  vars: "tmax,tmin,prcp"        # daily max/min temp (deg C) and precip (mm/day)
+  start_year: 2000              # match NASS start
+  end_year: 2023                # Daymet v4 R1 availability (yields past this lack weather; flagged at join)
+  # Growing-season window in Daymet's 365-day calendar (no Dec 31 in leap years):
+  season_start_yday: 91         # Apr 1
+  season_end_yday: 304          # Oct 31
+  gdd_base_c: 10                # growing-degree-day base (10 C ~= 50 F)
+  heat_threshold_c: 30          # count days with Tmax >= this as heat-stress days
+  centroid_topn: 2000           # # largest SSURGO polygons used for area-weighted county centroid
+
+kssl:
+  # NCSS/KSSL Soil Characterization (Lab Data Mart) via the SAME SDA web service.
+  # Pulls real lab pedons (chemistry + a Soil Taxonomy class label) to TRAIN the
+  # soil classifier. Queried state-by-state and stacked, so each query stays small.
+  base_url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest"
+  response_format: "JSON+COLUMNNAME"
+  # Region = PA + neighbors + New England. Chosen for soil-ORDER class diversity
+  # (Inceptisols/Ultisols/Alfisols/Entisols/Spodosols/Histosols) and sample size,
+  # while staying regionally relevant. Expand this list toward CONUS for more classes.
+  region_states:
+    ["PA", "NY", "NJ", "MD", "DE", "OH", "WV", "VA", "CT", "MA", "VT", "NH", "ME", "RI"]
+
+ssurgo:
+  # USDA SSURGO soil survey via the Soil Data Access (SDA) Tabular REST service.
+  # Docs: https://sdmdataaccess.sc.egov.usda.gov/  (POST {query, format})
+  # We query county-by-county (one SSURGO "survey area" per PA county) and
+  # aggregate to a single county-level soil summary that joins to NASS yields
+  # on county FIPS. The heavy SQL lives in data_ingest.py (it is implementation,
+  # not a tunable parameter); only the knobs below are configurable.
+  base_url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest"
+  state_areasymbol_prefix: "PA"   # PA county survey areas are 'PA001'..'PA133'
+  topsoil_depth_cm: 25            # aggregate horizon properties over 0-25 cm (plow layer / root zone)
+  response_format: "JSON+COLUMNNAME"
+
+nass:
+  # USDA NASS "Quick Stats" REST API.
+  # Docs: https://quickstats.nass.usda.gov/api
+  base_url: "https://quickstats.nass.usda.gov/api/api_GET/"
+
+  # We do NOT store the key in this file (it would land in git history).
+  # data_ingest.py reads it from this environment variable (loaded from .env).
+  api_key_env: "NASS_API_KEY"
+
+  # Parameters shared by every NASS query below. The named queries override /
+  # extend these. Granularity decision: COUNTY-level, PA only — that is the
+  # spatial unit of our analysis table (county-year).
+  defaults:
+    source_desc: "SURVEY"        # SURVEY = published estimates (vs CENSUS)
+    sector_desc: "CROPS"
+    agg_level_desc: "COUNTY"     # county is our join key with soil/weather
+    state_alpha: "PA"            # Pennsylvania; Chester County lives in here
+    format: "JSON"
+
+  # Named queries. `short_desc` is NASS's exact series label — pinning it is the
+  # most reliable way to get exactly one well-defined measurement back, instead
+  # of a mix of grain/silage or yield/area series.
+  queries:
+    corn_grain_yield:
+      commodity_desc: "CORN"
+      statisticcat_desc: "YIELD"
+      short_desc: "CORN, GRAIN - YIELD, MEASURED IN BU / ACRE"
+      unit_desc: "BU / ACRE"
+      year__GE: 2000             # NASS operator suffix: __GE means ">=". Start 2000.
+
+    soybean_yield:
+      commodity_desc: "SOYBEANS"
+      statisticcat_desc: "YIELD"
+      short_desc: "SOYBEANS - YIELD, MEASURED IN BU / ACRE"
+      unit_desc: "BU / ACRE"
+      year__GE: 2000
+
+    corn_silage_yield:
+      commodity_desc: "CORN"
+      statisticcat_desc: "YIELD"
+      short_desc: "CORN, SILAGE - YIELD, MEASURED IN TONS / ACRE"
+      unit_desc: "TONS / ACRE"
+      year__GE: 2000
+
+    winter_wheat_yield:
+      commodity_desc: "WHEAT"
+      statisticcat_desc: "YIELD"
+      short_desc: "WHEAT, WINTER - YIELD, MEASURED IN BU / ACRE"
+      unit_desc: "BU / ACRE"
+      year__GE: 2000
+
+    barley_yield:
+      commodity_desc: "BARLEY"
+      statisticcat_desc: "YIELD"
+      short_desc: "BARLEY - YIELD, MEASURED IN BU / ACRE"
+      unit_desc: "BU / ACRE"
+      year__GE: 2000
+
+    oats_yield:
+      commodity_desc: "OATS"
+      statisticcat_desc: "YIELD"
+      short_desc: "OATS - YIELD, MEASURED IN BU / ACRE"
+      unit_desc: "BU / ACRE"
+      year__GE: 2000
+
+    hay_yield:
+      commodity_desc: "HAY"
+      statisticcat_desc: "YIELD"
+      short_desc: "HAY - YIELD, MEASURED IN TONS / ACRE"
+      unit_desc: "TONS / ACRE"
+      year__GE: 2000
+
+    alfalfa_hay_yield:
+      commodity_desc: "HAY"
+      statisticcat_desc: "YIELD"
+      short_desc: "HAY, ALFALFA - YIELD, MEASURED IN TONS / ACRE"
+      unit_desc: "TONS / ACRE"
+      year__GE: 2000
