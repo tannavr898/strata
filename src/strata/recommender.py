@@ -229,7 +229,11 @@ class OptimizationEngine:
         return f"~{tons:.1f} tons ag lime / acre (ESTIMATE; confirm with AASL buffer table)"
 
     # ------------------------------------------------------------- phosphorus
-    def _phosphorus_rule(self, t: SoilTest) -> Optional[Recommendation]:
+    def _phosphorus_rule(
+        self, t: SoilTest, expected_yield: Optional[float] = None
+    ) -> Optional[Recommendation]:
+        # Input honesty: a predicted yield NEVER substitutes for a missing lab test.
+        # With no Mehlich-3 P we still refuse to interpret, regardless of expected_yield.
         if t.mehlich3_p_ppm is None:
             return Recommendation(
                 category="Phosphate (P2O5)",
@@ -242,16 +246,18 @@ class OptimizationEngine:
             )
         p = t.mehlich3_p_ppm
         if p < self.P_BELOW_OPTIMUM:
-            amount = self._maintenance_rate(t, nutrient="P2O5", build_up=True)
+            amount = self._maintenance_rate(t, "P2O5", build_up=True,
+                                            expected_yield=expected_yield)
             return Recommendation(
                 "Phosphate (P2O5)", "deficiency",
                 f"Mehlich-3 P {p:.0f} ppm",
                 f"below optimum (<{self.P_BELOW_OPTIMUM:.0f} ppm); yield response to added P likely",
-                "Apply P2O5: build toward optimum plus replace crop removal at your yield goal.",
+                "Apply P2O5: build toward optimum plus replace crop removal at your expected yield.",
                 amount, CITATIONS["p_mehlich3"],
             )
         if p <= self.P_OPTIMUM_HIGH:
-            amount = self._maintenance_rate(t, nutrient="P2O5", build_up=False)
+            amount = self._maintenance_rate(t, "P2O5", build_up=False,
+                                            expected_yield=expected_yield)
             return Recommendation(
                 "Phosphate (P2O5)", "maintenance",
                 f"Mehlich-3 P {p:.0f} ppm",
@@ -276,7 +282,10 @@ class OptimizationEngine:
         )
 
     # -------------------------------------------------------------- potassium
-    def _potassium_rule(self, t: SoilTest) -> Optional[Recommendation]:
+    def _potassium_rule(
+        self, t: SoilTest, expected_yield: Optional[float] = None
+    ) -> Optional[Recommendation]:
+        # Input honesty: a predicted yield NEVER substitutes for a missing lab test.
         if t.mehlich3_k_ppm is None:
             return Recommendation(
                 category="Potash (K2O)",
@@ -289,16 +298,18 @@ class OptimizationEngine:
             )
         k = t.mehlich3_k_ppm
         if k < self.K_BELOW_OPTIMUM:
-            amount = self._maintenance_rate(t, nutrient="K2O", build_up=True)
+            amount = self._maintenance_rate(t, "K2O", build_up=True,
+                                            expected_yield=expected_yield)
             return Recommendation(
                 "Potash (K2O)", "deficiency",
                 f"Mehlich-3 K {k:.0f} ppm",
                 f"below optimum (<{self.K_BELOW_OPTIMUM:.0f} ppm); yield response to added K likely",
-                "Apply K2O: build toward optimum plus replace crop removal at your yield goal.",
+                "Apply K2O: build toward optimum plus replace crop removal at your expected yield.",
                 amount, CITATIONS["k_mehlich3"],
             )
         if k <= self.K_OPTIMUM_HIGH:
-            amount = self._maintenance_rate(t, nutrient="K2O", build_up=False)
+            amount = self._maintenance_rate(t, "K2O", build_up=False,
+                                            expected_yield=expected_yield)
             return Recommendation(
                 "Potash (K2O)", "maintenance",
                 f"Mehlich-3 K {k:.0f} ppm",
@@ -314,30 +325,53 @@ class OptimizationEngine:
             None, CITATIONS["k_mehlich3"],
         )
 
-    def _maintenance_rate(self, t: SoilTest, nutrient: str, build_up: bool) -> Optional[str]:
-        """Crop-removal maintenance rate (lb nutrient/acre) at the stated yield goal.
+    def _maintenance_rate(
+        self, t: SoilTest, nutrient: str, build_up: bool,
+        expected_yield: Optional[float] = None,
+    ) -> Optional[str]:
+        """Crop-removal maintenance rate (lb nutrient/acre) at the EXPECTED harvest.
 
-        Only emitted for crops with established removal coefficients and when a
-        yield goal is given; otherwise None (we don't fabricate a number). Build-up
-        on a below-optimum soil ADDS to this, so we flag the rate as a floor."""
+        Removal scales with how much crop actually leaves the field, so the basis is:
+          1. a model `expected_yield` (from YieldModel) when one is supplied -- the
+             harvest the field is predicted to produce; else
+          2. the farmer's stated `yield_goal`; else
+          3. None -- no coefficient or no yield basis, so we fabricate no number.
+        The printed rate names which basis it used, so a model estimate is never
+        silently passed off as a measured/target value. Build-up on a below-optimum
+        soil ADDS to this, so we flag the rate as a floor."""
         coeffs = self.REMOVAL.get(t.crop)
-        if coeffs is None or t.yield_goal is None:
+        if coeffs is None:
+            return None
+        if expected_yield is not None:
+            basis, basis_label = expected_yield, "predicted yield (YieldModel)"
+        elif t.yield_goal is not None:
+            basis, basis_label = t.yield_goal, "yield goal"
+        else:
             return None
         p2o5_per, k2o_per, unit = coeffs
         per = p2o5_per if nutrient == "P2O5" else k2o_per
-        lbs = per * t.yield_goal
+        lbs = per * basis
         tag = " + build-up to optimum (see AASL report)" if build_up else ""
         return (f"~{lbs:.0f} lb {nutrient}/acre to replace removal at "
-                f"{t.yield_goal:.0f} {unit}/acre yield goal{tag}")
+                f"{basis:.0f} {unit}/acre {basis_label}{tag}")
 
     # -------------------------------------------------------------- public API
-    def recommend(self, t: SoilTest) -> list[Recommendation]:
+    def recommend(
+        self, t: SoilTest, expected_yield: Optional[float] = None
+    ) -> list[Recommendation]:
         """Run every rule and return the recommendations that apply, in a fixed
-        order (lime, then P, then K) for a stable, readable report."""
+        order (lime, then P, then K) for a stable, readable report.
+
+        `expected_yield` (optional) is a model-predicted harvest from YieldModel; it
+        scales the maintenance P/K removal rate (bigger harvest removes more). Default
+        None keeps the engine standalone -- it then falls back to the SoilTest's
+        yield_goal, exactly as before. It NEVER relaxes the P/K input-honesty rule:
+        a missing lab test still returns 'obtain a soil test', predicted yield or not.
+        """
         recs = [
             self._lime_rule(t),
-            self._phosphorus_rule(t),
-            self._potassium_rule(t),
+            self._phosphorus_rule(t, expected_yield),
+            self._potassium_rule(t, expected_yield),
         ]
         return [r for r in recs if r is not None]
 
