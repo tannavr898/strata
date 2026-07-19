@@ -149,8 +149,16 @@ def build_analysis_table(
         base = base[~no_fips]
 
     # ----------------------------------------------------- join 1: static soil
-    # Inner join on county FIPS. This is where NASS pseudo-counties ("other
-    # combined counties") fall out: they have no SSURGO survey area.
+    # Inner join on county FIPS ONLY (not on year): the SSURGO soil summary is a
+    # single STATIC snapshot per county with no time axis, so every year of a county
+    # is stamped with an identical soil row. Consequence for the yield model
+    # (quantified in the README): these features have ZERO within-county variance and
+    # can only address the ~20% between-county share of corn yield variance -- never
+    # the ~80% that varies year to year. That within-county signal has to come from
+    # weather + the time trend; a future within-field, within-season probe reading
+    # (the calibration seam) is the only way to add a time-varying soil feature here.
+    # This is also where NASS pseudo-counties ("other combined counties") fall out:
+    # they have no SSURGO survey area.
     soil_cols = ["county_ansi", "areasymbol"] + _SOIL_FEATURES
     before = len(base)
     real_fips = set(soil["county_ansi"])

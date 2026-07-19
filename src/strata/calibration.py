@@ -18,6 +18,19 @@ against a handful of lab samples, then feed calibrated readings into the same
 recommender. Nothing upstream needs to change. This file defines that contract now
 so the hardware can land later without a rewrite.
 
+WHAT a probe adds that the current feature matrix cannot (the ceiling it lifts)
+-------------------------------------------------------------------------------
+The yield model's honest ceiling (LCO R^2 ~0.5 / forward ~0.35) is not a tuning
+problem — it is a feature-information limit. SSURGO soil is a single STATIC snapshot
+per county: it has no time axis, so it explains only the ~20% between-county share
+of corn yield variance and NOTHING of the ~80% that varies year to year (see the
+README variance decomposition). A cheap probe read at a field in-season is the one
+thing that changes that: a TIME-VARYING soil measurement, a feature that does not
+exist anywhere in the matrix today. Calibrated onto the lab scale here, it becomes
+the first input that can speak to the within-county, year-to-year variance the
+static SSURGO layer structurally cannot. That — not merely finer spatial resolution
+— is why this seam is where genuinely new predictive signal would enter.
+
 HONESTY: there is no probe and no real probe data yet
 -----------------------------------------------------
 No hardware exists, so there is NO real (probe, lab) dataset to fit. The demo
