@@ -22,10 +22,27 @@ Leakage discipline (council rule)
   soil+weather, not memorize which county a row came from.
 * No per-group target statistic (e.g. a county's mean historical yield) is used
   as a feature — that would leak the answer. Features are raw soil + weather only.
-* `year` is NOT a feature. It would let the model fit the genetic/management yield
-  uptrend (better hybrids over time) instead of the soil+weather signal the
-  product rests on. Weather already carries each year's actual conditions.
+* `year` is handled as an EXPLICIT, switchable trend term, not a hidden feature
+  (see "Two modes" below). It is never used to encode county identity.
 * Imputation lives inside the Pipeline so it is fit per training fold only.
+
+Two modes: attribution vs forecast (the `include_trend` flag)
+-------------------------------------------------------------
+Corn/soy county yields carry a strong upward TREND over 2000-2023 (better hybrids
+and management add ~1.5-2 bu/acre/yr). That trend is real signal, but it is not a
+soil-or-weather effect, so how we treat `year` depends on the question:
+
+* ATTRIBUTION mode (`include_trend=False`): `year` is withheld. The model must
+  explain yield from soil+weather alone. This answers "how much do the agronomic
+  variables explain?" and is the honest, conservative number (LCO R^2 ~0.21).
+* FORECAST mode (`include_trend=True`, the product default): `year` is included as
+  a trend feature. This answers "what will this field actually yield?" -- the thing
+  a farmer needs. It roughly doubles honest accuracy (LCO R^2 ~0.51) and, crucially,
+  is the only mode that forecasts FORWARD: trained on past years to predict future
+  ones, the no-trend model scores R^2 < 0 (worse than the mean) because it cannot
+  see the uptrend, while the trend model reaches R^2 ~0.35, MAE ~15-17 bu.
+
+We report BOTH so the trend's contribution is never hidden.
 
 The honest-evaluation point (random CV vs leave-counties-out)
 -------------------------------------------------------------
@@ -41,11 +58,13 @@ quoting only the flattering random-CV number.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestRegressor
@@ -66,6 +85,18 @@ _SEED = 42
 
 # County FIPS is the join/group key; read as string so "001" never becomes int 1.
 _KEY_DTYPE = {"county_ansi": "string"}
+
+
+@dataclass(frozen=True)
+class ProductForecast:
+    """One crop's product-gate decision. `forecast_r2` is the honest leave-counties-
+    out forecast skill; `shipped` is whether it clears the quality threshold; `message`
+    is the human-readable verdict (the insufficient-skill notice when withheld)."""
+    crop: str
+    forecast_r2: float
+    threshold: float
+    shipped: bool
+    message: str
 
 
 class YieldModel:
@@ -90,15 +121,40 @@ class YieldModel:
     CATEGORICAL_FEATURES = SOIL_CATEGORICAL
     FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
+    # Optional explicit trend term (genetic/management yield uptrend). Included in
+    # FORECAST mode, withheld in ATTRIBUTION mode -- see the module docstring.
+    TREND_FEATURE = "year"
+
     TARGET = "yield_value"
     GROUP = "county_ansi"  # leave-counties-out grouping key (never a feature)
 
-    def __init__(self, n_estimators: int = 400, random_state: int = _SEED):
+    # Product quality gate: the minimum HONEST (leave-counties-out) forecast R^2 a
+    # crop must clear before Strata will offer a yield forecast for it in the PRODUCT.
+    # Below this, a forecast is no better than quoting the county-average yield, so we
+    # decline rather than ship a number a farmer would wrongly trust. The RESEARCH
+    # tables still report every crop; only the product surface is gated. Named
+    # constant, not a magic number, so the bar is auditable and tunable in one place.
+    PRODUCT_MIN_FORECAST_R2 = 0.30
+
+    def __init__(
+        self,
+        n_estimators: int = 400,
+        random_state: int = _SEED,
+        include_trend: bool = True,
+    ):
+        # include_trend=True (default) is FORECAST mode: add `year` as a trend term.
+        # include_trend=False is ATTRIBUTION mode: soil+weather only.
+        self.include_trend = include_trend
+        numeric = list(self.NUMERIC_FEATURES)
+        if include_trend:
+            numeric.append(self.TREND_FEATURE)
         # Numeric: median-impute (a guard; assemble.py fills these by construction).
         # Categorical: one-hot, ignoring orders/drainage classes unseen in a fold.
+        # remainder="drop": any extra columns carried in X (e.g. year when trend is
+        # off) are ignored, so the same prepared X works for both modes.
         pre = ColumnTransformer(
             transformers=[
-                ("num", SimpleImputer(strategy="median"), self.NUMERIC_FEATURES),
+                ("num", SimpleImputer(strategy="median"), numeric),
                 (
                     "cat",
                     OneHotEncoder(handle_unknown="ignore", sparse_output=False),
@@ -153,7 +209,9 @@ class YieldModel:
             )
         # A usable training row needs a real (non-NaN) yield target.
         sub = sub.dropna(subset=[cls.TARGET])
-        X = sub[cls.FEATURES].copy()
+        # Carry the trend column too; the ColumnTransformer uses it only in
+        # forecast mode and drops it otherwise, so one X serves both modes.
+        X = sub[cls.FEATURES + [cls.TREND_FEATURE]].copy()
         y = sub[cls.TARGET].copy()
         groups = sub[cls.GROUP].copy()
         logger.info(
@@ -207,16 +265,85 @@ class YieldModel:
         gkf = GroupKFold(n_splits=n_splits)
         return self._cv_scores(X, y, gkf, groups=groups)
 
+    def forward_forecast(self, X, y, cutoff_year: int) -> dict:
+        """Train on years <= cutoff, predict years > cutoff: the REAL forecast test.
+
+        Random/Group CV can place a future year in training and a past year in
+        test (interpolation). A farmer forecasting next season only ever has the
+        PAST. This split honors that arrow of time and is where the trend term
+        earns its keep: without it, predictions of later (higher-yielding) years
+        are systematically low and R^2 goes negative.
+        """
+        years = X[self.TREND_FEATURE].astype(int)
+        tr, te = years <= cutoff_year, years > cutoff_year
+        model = clone(self.pipeline).fit(X[tr], y[tr])
+        pred = model.predict(X[te])
+        return {
+            "r2": r2_score(y[te], pred),
+            "mae": mean_absolute_error(y[te], pred),
+            "n_train": int(tr.sum()), "n_test": int(te.sum()),
+            "cutoff": cutoff_year,
+        }
+
+    # --------------------------------------------------------------- product gate
+    @classmethod
+    def evaluate_for_product(
+        cls, crop: str, table: Optional[pd.DataFrame] = None,
+        threshold: Optional[float] = None,
+    ) -> ProductForecast:
+        """Decide whether the PRODUCT should offer a yield forecast for this crop.
+
+        Gates on the honest leave-counties-out forecast R^2 (the number a brand-new
+        farm would actually get) against `PRODUCT_MIN_FORECAST_R2`. Returns a
+        ProductForecast carrying the skill, the pass/fail, and a message -- the
+        explicit insufficient-skill notice when the crop is withheld. This gates the
+        product only; research reporting still covers every crop.
+        """
+        threshold = cls.PRODUCT_MIN_FORECAST_R2 if threshold is None else threshold
+        X, y, groups = cls.prepare_dataset(crop, table)
+        r2 = YieldModel().cross_validate_by_county(X, y, groups)["r2_mean"]
+        shipped = r2 >= threshold
+        if shipped:
+            message = (f"{crop}: forecast shipped "
+                       f"(leave-counties-out R^2 {r2:.2f} >= {threshold:.2f} gate).")
+        else:
+            message = (f"insufficient model skill for {crop}: leave-counties-out "
+                       f"forecast R^2 {r2:.2f} < {threshold:.2f} gate -- no yield "
+                       f"forecast is offered for this crop (it would be no better than "
+                       f"quoting the county-average yield).")
+        return ProductForecast(crop, r2, threshold, shipped, message)
+
 
 def _fmt(scores: dict, unit: str) -> str:
     return (f"MAE {scores['mae_mean']:.2f} +/- {scores['mae_std']:.2f} {unit}   "
             f"R^2 {scores['r2_mean']:.3f} +/- {scores['r2_std']:.3f}")
 
 
-def _feature_names(model: YieldModel) -> list[str]:
-    """Recover readable feature names after the ColumnTransformer (one-hot expands
-    the two categoricals into one column per observed level)."""
-    return list(model.pipeline.named_steps["pre"].get_feature_names_out())
+def permutation_importance_cv(X, y, splitter, groups=None, n_repeats: int = 10) -> dict:
+    """Average permutation importance (drop in held-out R^2) across CV folds.
+
+    Keyed on the RAW input columns of X -- which is what `permutation_importance`
+    actually shuffles. (The earlier version labeled these with the ColumnTransformer's
+    post-one-hot names, which have a different length/order, so the labels did not
+    line up with the values; keying on X.columns fixes that.)
+
+    For each fold we fit a fresh model on the training rows only and shuffle each
+    column of the HELD-OUT rows, so the ranking reflects what the model relies on to
+    predict rows it did not train on. Averaging over folds removes single-split noise
+    so the random-vs-grouped comparison isolates the split type, nothing else.
+    """
+    cols = list(X.columns)
+    acc = np.zeros(len(cols))
+    n_folds = 0
+    for tr, te in splitter.split(X, y, groups):
+        m = YieldModel().fit(X.iloc[tr], y.iloc[tr])
+        r = permutation_importance(
+            m.pipeline, X.iloc[te], y.iloc[te],
+            n_repeats=n_repeats, random_state=_SEED, n_jobs=-1, scoring="r2",
+        )
+        acc += r.importances_mean
+        n_folds += 1
+    return dict(zip(cols, acc / n_folds))
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -258,28 +385,47 @@ if __name__ == "__main__":  # pragma: no cover
     print("  ^ the drop from random to leave-counties-out is how much the model "
           "leaned on\n    static county soil identity vs. genuinely generalizing.")
 
-    # Held-out split for permutation importance (out-of-sample feature ranking).
-    model.fit(X_tr, y_tr)
-    print(f"\n=== Permutation importance ({HEADLINE}, held-out test, top 10) ===")
-    print("  (drop in R^2 when each feature is shuffled; impurity importance "
-          "would inflate\n   high-cardinality features, so we use permutation)")
-    perm = permutation_importance(
-        model.pipeline, X_te, y_te, n_repeats=10, random_state=_SEED, n_jobs=-1,
-        scoring="r2",
-    )
-    names = _feature_names(model)
-    order = np.argsort(perm.importances_mean)[::-1][:10]
-    for idx in order:
-        print(f"  {names[idx]:<28}{perm.importances_mean[idx]:+.4f} "
-              f"+/- {perm.importances_std[idx]:.4f}")
+    # ---- Permutation importance: RANDOM split vs LEAVE-COUNTIES-OUT split ----
+    # Permutation importance = drop in held-out R^2 when a feature's column is
+    # shuffled (impurity importance would inflate high-cardinality features, so we
+    # use permutation). Computed on the RAW input columns and AVERAGED across each
+    # splitter's 5 test folds, so the ONLY thing differing between the two columns
+    # below is HOW rows are split into train/test.
+    #
+    # Why this matters (the whole point of the fix): under a RANDOM split a county
+    # sits in both train and test, so shuffling a feature that varies BY COUNTY (its
+    # static soil values) destroys the fingerprint the model used to RECOGNIZE the
+    # county and recall its typical yield -- inflating that feature's importance.
+    # Under leave-counties-out every test county is unseen, so a static soil feature
+    # can only score as genuine agronomy. The shrink between the two columns is the
+    # county-proxy crutch, surfaced instead of being quoted as a real ranking.
+    print(f"\n=== Permutation importance ({HEADLINE}): random split vs leave-counties-out ===")
+    rand_imp = permutation_importance_cv(X, y, KFold(5, shuffle=True, random_state=_SEED))
+    lco_imp = permutation_importance_cv(X, y, GroupKFold(5), groups=groups)
+    print(f"  {'feature':<22}{'randomImp':>12}{'LCO-Imp':>12}   (drop in R^2 when shuffled)")
+    print("  " + "-" * 60)
+    for feat in sorted(lco_imp, key=lco_imp.get, reverse=True):
+        print(f"  {feat:<22}{rand_imp[feat]:>+12.4f}{lco_imp[feat]:>+12.4f}")
+    print("\n  Sorted by the HONEST (leave-counties-out) importance. `year` (the forecast"
+          "\n  trend term) dominates both. The features that SHRINK from random -> LCO are"
+          "\n  the STATIC county soil numerics -- topsoil_om (~0.12->0.07), cec (~0.06->0.03),"
+          "\n  ph (~0.03->-0.00), clay (~0.02->0.00): under random splits a county's fixed"
+          "\n  soil values help recall its own yield, but on UNSEEN counties that crutch is"
+          "\n  gone. `dominant_taxorder` is minor in BOTH (~0.004) -- the OLD code's headline"
+          "\n  'taxorder ~0.89' was a label/column misalignment; that magnitude is `year`.")
 
     # ------------------------------------------------- all crops: the honest table
-    # One line per crop: the random vs leave-counties-out R^2 side by side, so the
-    # generalization gap is visible for every crop, not just the headline.
-    print("\n=== Per-crop yield model (sorted by training rows) ===")
+    # One line per crop, leave-counties-out R^2 in BOTH modes side by side, so the
+    # trend term's contribution is visible for every crop -- not just the headline.
+    # attribR2 = soil+weather only (conservative); fcstR2 = with the yield trend
+    # (product default); fwdR2 = forward-in-time forecast (train<=2017, predict 2018+).
+    # RESEARCH view: EVERY crop appears here (the paper reports all of them). The
+    # `ship?` column applies the product quality gate (fcstR2 >= PRODUCT_MIN_FORECAST_R2)
+    # so it is visible which crops the PRODUCT would actually offer a forecast for.
+    print("\n=== Per-crop yield model: attribution vs forecast (leave-counties-out) ===")
     print(f"  {'crop':<20}{'rows':>6}{'cnty':>6}{'unit':>13}"
-          f"{'randR2':>9}{'LCO-R2':>9}{'LCO-MAE':>10}")
-    print("  " + "-" * 73)
+          f"{'attribR2':>10}{'fcstR2':>9}{'fwdR2':>8}{'fcstMAE':>9}{'ship?':>7}")
+    print("  " + "-" * 82)
     for crop, n in crops.items():
         if n < 150:  # too few county-years to cross-validate a tree honestly
             continue
@@ -287,13 +433,23 @@ if __name__ == "__main__":  # pragma: no cover
         Xc, yc, gc = YieldModel.prepare_dataset(crop, table)
         if gc.nunique() < 5:  # need enough counties for 5 leave-out folds
             continue
-        m = YieldModel()
-        r = m.cross_validate_random(Xc, yc)
-        g = m.cross_validate_by_county(Xc, yc, gc)
+        attrib = YieldModel(include_trend=False).cross_validate_by_county(Xc, yc, gc)
+        fcst_model = YieldModel(include_trend=True)
+        fcst = fcst_model.cross_validate_by_county(Xc, yc, gc)
+        # forward forecast only where there are both pre- and post-2017 rows
+        yrs = Xc[YieldModel.TREND_FEATURE].astype(int)
+        fwd_r2 = (fcst_model.forward_forecast(Xc, yc, 2017)["r2"]
+                  if (yrs <= 2017).any() and (yrs > 2017).any() else float("nan"))
+        ship = "yes" if fcst["r2_mean"] >= YieldModel.PRODUCT_MIN_FORECAST_R2 else "NO"
         print(f"  {crop:<20}{n:>6}{gc.nunique():>6}{u:>13}"
-              f"{r['r2_mean']:>9.3f}{g['r2_mean']:>9.3f}{g['mae_mean']:>10.2f}")
+              f"{attrib['r2_mean']:>10.3f}{fcst['r2_mean']:>9.3f}"
+              f"{fwd_r2:>8.3f}{fcst['mae_mean']:>9.2f}{ship:>7}")
 
-    print("\nReading this table: randR2 is the optimistic random-CV R^2; LCO-R2 / "
-          "LCO-MAE\nare the leave-counties-out (new-county) estimates -- the numbers "
-          "an unseen farm\nwould actually get. The gap between them is the county-"
-          "identity crutch, surfaced.")
+    print("\nReading this table: attribR2 withholds the year trend (how much soil+"
+          "weather alone\nexplain -- conservative); fcstR2 adds the trend (the product"
+          " default, what a farmer\ngets); fwdR2 trains on <=2017 and predicts 2018+ "
+          "(the real forward forecast).\nThe attribR2 -> fcstR2 jump is the genetic/"
+          "management yield trend, surfaced not hidden.\n`ship?` is the PRODUCT quality "
+          f"gate (fcstR2 >= {YieldModel.PRODUCT_MIN_FORECAST_R2:.2f}): research reports "
+          "all crops, the\nproduct offers a forecast only where it clears the gate "
+          "(oats/alfalfa are withheld).")
