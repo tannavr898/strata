@@ -35,7 +35,8 @@ strata/
 │   ├── yield_model.py       # [IMPLEMENTED] YieldModel (RandomForestRegressor)
 │   ├── recommender.py       # [IMPLEMENTED] OptimizationEngine (cited Penn State rules)
 │   ├── calibration.py       # [IMPLEMENTED] cheap-probe vs lab calibration seam
-│   └── main.py              # [IMPLEMENTED] orchestrator + readable report
+│   ├── main.py              # [IMPLEMENTED] orchestrator + readable report
+│   └── report.py            # [IMPLEMENTED] 4-panel diagnostic dashboard PNG
 ├── requirements.txt
 ├── .env.example             # copy to .env, add NASS_API_KEY
 └── README.md
@@ -148,6 +149,49 @@ what we get is complete). Counts and **caveats that matter for the yield model**
   (predicting soil order from coordinates would be leakage; the goal is to
   predict it from measurable soil properties).
 
+#### Yield model results (`yield_model.py`, observed 2026-07-07)
+
+Per-crop RandomForest regressors predict county-year yield from soil + weather.
+Two honest cross-validations are reported: random k-fold (optimistic — a county's
+static soil fingerprint leaks across folds) vs **leave-counties-out (LCO)**, plus a
+**forward-in-time** forecast (train ≤2017, predict 2018+). `year` is a switchable
+trend term: withheld = *attribution* (soil+weather only), included = *forecast*
+(product default). County identity is never a feature.
+
+Corn grain (1,138 county-years, 56 counties):
+- mean-yield baseline MAE **21.7 bu/ac** → model LCO forecast MAE **~15 bu/ac**.
+- LCO R²: **0.21 attribution → 0.51 forecast**; forward-forecast R² **0.35**.
+- The random→LCO drop (0.68→0.51) is exactly the county-memorization the design
+  warns about — LCO is the number to trust.
+
+| crop | attribR² | fcstR² | fwdR² | fcst MAE | ship? |
+|---|--:|--:|--:|--:|:--:|
+| corn_grain | 0.21 | 0.51 | 0.35 | 14.9 bu/ac | ✓ |
+| soybean | 0.26 | 0.51 | 0.32 | 4.2 bu/ac | ✓ |
+| hay | 0.41 | 0.52 | — | 0.24 t/ac | ✓ |
+| corn_silage | 0.23 | 0.44 | 0.46 | 2.1 t/ac | ✓ |
+| barley | 0.31 | 0.38 | — | 6.9 bu/ac | ✓ |
+| winter_wheat | 0.12 | 0.33 | — | 6.6 bu/ac | ✓ |
+| alfalfa_hay | 0.16 | 0.18 | -0.00 | 0.40 t/ac | ✗ |
+| oats | -0.02 | 0.07 | -0.04 | 6.6 bu/ac | ✗ |
+
+- **Stated honestly:** `oats` and `alfalfa` are essentially unexplained by soil+
+  weather (R² ≈ 0) — surfaced, not masked. Corn/soy/silage/hay/barley forecast
+  usefully. The attribR²→fcstR² jump is the genetic/management yield trend.
+- **Product quality gate (`ship?`).** Research reports every crop; the *product*
+  offers a forecast only where the honest LCO forecast R² clears a named threshold
+  (`YieldModel.PRODUCT_MIN_FORECAST_R2 = 0.30`). `oats` (0.07) and `alfalfa` (0.18)
+  fall below it and are withheld with an explicit *"insufficient model skill"*
+  message rather than shipped as a number a farmer would wrongly trust.
+- **Permutation importance is computed leave-counties-out** (random vs LCO shown
+  side by side). Doing so corrected an earlier reading: the old headline
+  `dominant_taxorder ≈ 0.89` was a *label/column misalignment* — that magnitude is
+  actually `year` (the trend term). Correctly labeled, taxorder is minor in **both**
+  splits (~0.004). The features that genuinely shrink random→LCO are the **static
+  soil numerics** (`topsoil_om` 0.12→0.07, `cec` 0.06→0.03, `ph`/`clay`→~0), i.e.
+  the county-recall crutch, exactly as the between/within-county variance split
+  below predicts.
+
 #### Soil classifier results (`soil_classifier.py`, observed 2026-06-24)
 
 Predicts Soil Taxonomy ORDER from measured lab properties only (texture, pH, CEC,
@@ -176,53 +220,85 @@ orders; aridisols/vertisols/oxisols dropped as too rare to validate — 25 pedon
 - **Join caveat:** Daymet ends 2023; NASS yields run to 2025. The 2024-2025
   yield rows will have no weather and drop from the modeling join (reported there).
 
-#### Yield model results (`yield_model.py`, observed 2026-06-26)
+#### Yield model results (`yield_model.py`, observed 2026-06-30)
 
 Regresses a crop's county-year YIELD onto static county soil (0-25cm topsoil
 texture/pH/OM/CEC + taxonomic order & drainage) and that year's growing-season
 weather. **One model per crop** — yield units differ by crop (BU/ACRE vs
-TONS/ACRE), so pooling would make the metrics meaningless. `year`, county
-identity, and any per-county target statistic are excluded as leakage.
+TONS/ACRE), so pooling would make the metrics meaningless. County identity and any
+per-county target statistic are always excluded as leakage.
 
-The headline rigor here is reporting **two** cross-validation views, because soil
-features are county-static (every row from a county shares them):
+**Two modes for `year` (the `include_trend` flag).** Corn/soy county yields carry
+a strong upward trend over 2000-2023 (better hybrids/management add ~1.5-2
+bu/acre/yr). That is real signal, but not a soil-or-weather effect, so we report
+both treatments rather than pick one:
 
-- **Random 5-fold CV** lets a county sit in train and test, so the model can
-  recognize it by its soil fingerprint — optimistic.
-- **Leave-counties-out 5-fold CV (GroupKFold on FIPS)** holds every test county
-  out of training — the honest estimate for a *new* farm in an unmodeled county.
+- **Attribution mode** (`include_trend=False`) withholds `year`: how much do
+  soil+weather *alone* explain? The conservative number.
+- **Forecast mode** (`include_trend=True`, the **product default**) adds `year` as
+  a trend term: what will the field actually yield? This is what a farmer needs and
+  it roughly **doubles** honest accuracy. Critically, it is the only mode that
+  forecasts **forward in time** (train on the past, predict the future): a no-trend
+  model trained on ≤2017 scores **R² < 0** on 2018+ (worse than the mean, because it
+  cannot see the uptrend), while the trend model reaches R² ≈ 0.35.
+
+Each treatment is still validated two ways — **random 5-fold CV** (optimistic; a
+county can sit in train and test) and **leave-counties-out CV** (GroupKFold on
+FIPS; the honest new-county estimate). Plus a **forward forecast** (train ≤2017,
+predict 2018+), the real-world arrow-of-time test.
 
 Corn grain (1,138 county-years, 56 counties, BU/ACRE):
 
 | evaluation | MAE | R² |
 |------------|----:|---:|
 | mean-yield baseline (held-out) | 21.7 | ~0.00 |
-| random 5-fold CV | 18.3 | 0.368 |
-| leave-counties-out 5-fold CV | 19.9 | 0.212 |
+| attribution, leave-counties-out (soil+weather only) | 19.9 | 0.212 |
+| **forecast, leave-counties-out (+trend)** | **14.9** | **0.513** |
+| forecast, forward-in-time (train ≤2017) | 16.9 | 0.347 |
+| same forward test **without** trend | 25.9 | **−0.42** |
 
-Per-crop (random R² vs leave-counties-out R² / MAE), crops with ≥150 county-years:
+Per-crop leave-counties-out R² in both modes, plus the forward forecast (crops with
+≥150 county-years; `nan` = the NASS series ends before 2018 so no forward split):
 
-| crop | rows | counties | unit | rand R² | LCO R² | LCO MAE |
-|------|-----:|---------:|------|--------:|-------:|--------:|
-| corn_grain_yield   | 1138 | 56 | BU/ACRE   | 0.368 | 0.212 | 19.9 |
-| oats_yield         |  977 | 52 | BU/ACRE   | 0.113 | -0.02 |  7.0 |
-| soybean_yield      |  949 | 51 | BU/ACRE   | 0.380 | 0.262 |  5.2 |
-| corn_silage_yield  |  883 | 56 | TONS/ACRE | 0.376 | 0.227 |  2.4 |
-| alfalfa_hay_yield  |  727 | 56 | TONS/ACRE | 0.306 | 0.157 |  0.4 |
-| winter_wheat_yield |  630 | 50 | BU/ACRE   | 0.344 | 0.122 |  7.5 |
-| hay_yield          |  483 | 56 | TONS/ACRE | 0.410 | 0.409 |  0.3 |
-| barley_yield       |  345 | 33 | BU/ACRE   | 0.396 | 0.305 |  7.3 |
+| crop | rows | counties | unit | attrib R² | forecast R² | forward R² | fcst MAE |
+|------|-----:|---------:|------|----------:|------------:|-----------:|---------:|
+| corn_grain_yield   | 1138 | 56 | BU/ACRE   | 0.212 | 0.513 |  0.347 | 14.9 |
+| oats_yield         |  977 | 52 | BU/ACRE   | -0.019 | 0.072 | -0.039 |  6.6 |
+| soybean_yield      |  949 | 51 | BU/ACRE   | 0.262 | 0.510 |  0.322 |  4.2 |
+| corn_silage_yield  |  883 | 56 | TONS/ACRE | 0.227 | 0.439 |  0.458 |  2.1 |
+| alfalfa_hay_yield  |  727 | 56 | TONS/ACRE | 0.157 | 0.180 | -0.002 |  0.4 |
+| winter_wheat_yield |  630 | 50 | BU/ACRE   | 0.122 | 0.332 |    nan |  6.6 |
+| hay_yield          |  483 | 56 | TONS/ACRE | 0.409 | 0.523 |    nan |  0.2 |
+| barley_yield       |  345 | 33 | BU/ACRE   | 0.305 | 0.376 |    nan |  6.9 |
 
-- The model **clearly beats the mean-yield baseline** (R² ~0) but the random→LCO
-  gap shows part of the random-CV score is a county-identity crutch. The
-  leave-counties-out numbers are reported as the real-world expectation.
-- **Permutation importance is dominated by weather** — `heat_days_30c`,
-  `tmin_mean_c`, `precip_total_mm` — which is expected and honest: soil is static,
-  so it cannot explain *year-to-year* yield swings; the year's weather can. Soil
-  (CEC, OM) contributes second-order. This says yield variance at county-year
-  granularity is mostly a weather story, and the README does not oversell soil.
-- `oats_yield` LCO-R² is ≈0: it does not generalize to unseen counties and is
-  reported as such rather than masked by the flattering random-CV number.
+- The trend term lifts **every crop** (corn 0.21→0.51, soy 0.26→0.51, silage
+  0.23→0.44, wheat 0.12→0.33). It is surfaced as an explicit, switchable feature,
+  not hidden, and the conservative attribution number is reported alongside it.
+- **What does NOT help (tested, rejected):** gradient boosting, ExtraTrees,
+  hyperparameter tuning, county lat/lon, and engineered weather/soil interactions
+  were all measured against the same honest metrics and **none beat RF+trend** on
+  the forward forecast; some (ExtraTrees) raise leave-counties-out R² while
+  *lowering* forward R² — a mirage we declined to ship. Replacing the `year` feature
+  with an explicit linear **detrend** (linear trend + RF on the residual) was also
+  tested on the theory that a RandomForest cannot extrapolate `year` past its
+  training range; it **slightly hurt** the forward forecast (corn 0.35→0.29) rather
+  than helping — the linear trend *overshoots* on 2018+ while the year-in-RF model,
+  which holds near its terminal-year level, was already close. A null result, kept
+  as a finding rather than tuned away.
+- **Why the ceiling is where it is (measured, not asserted).** A between/within-county
+  variance decomposition of corn yield is **20% between-county / 80% within-county**
+  (year to year). The 8 SSURGO soil features are **static per county** — one value,
+  no time axis — so they have *zero* variance within a county and can only ever
+  address the ~20% between-county share; they contribute literally nothing to the
+  80% that varies year to year. That within-county 80% is ~30% a smooth time trend
+  and ~70% weather+noise, so a *single county-centroid* Daymet series plus the trend
+  is all that speaks to it. LCO R² ≈ 0.5 / forward R² ≈ 0.35 is therefore a
+  **feature-information ceiling**, not a model-tuning one: no estimator can extract
+  within-county signal the feature matrix does not contain. The next real gain needs
+  a feature that varies *within* a county over time — exactly what the calibration
+  seam is built to ingest.
+- `oats_yield` stays ≈0 even with the trend: it does not generalize to unseen
+  counties and is reported as such rather than masked.
 
 #### Recommendation engine (`recommender.py`)
 
@@ -239,8 +315,15 @@ learned model and not the old circular IQR scorer (which is gone). Rules covered
   optimum 30–50, above 50–200, excessive >200 ppm → P-Index concern).
 - **Potash (K2O)** — Mehlich-3 K interpretation (below optimum <100, optimum
   ~100–130, above >130 ppm).
-- **Maintenance rates** from cited crop-removal coefficients (corn grain, soybean)
-  at the user's yield goal; build-up on below-optimum soils is flagged as a floor.
+- **Maintenance rates** from cited crop-removal coefficients (corn grain, soybean),
+  scaled to the **expected harvest**; build-up on below-optimum soils is flagged as a
+  floor. The removal basis is, in order: a **YieldModel-predicted yield** when one is
+  supplied (`recommend(..., expected_yield=...)`), else the farmer's stated yield goal,
+  else no rate (never fabricated). This is the one place the two modules **compose** —
+  a larger predicted harvest removes more nutrients — and the printed rate names which
+  basis it used, so a model estimate is never passed off as a measured target. The
+  handoff is gated: `main.py` only feeds a predicted yield when the crop cleared the
+  product quality gate above.
 
 Every recommendation prints the measured value, the threshold it crossed, the
 action, an amount where defensible, and a **citation** to the source rule. Design
@@ -268,6 +351,15 @@ correction and reports its quality (slope, R², RMSE, and the raw probe↔lab bi
 calibration removes). A raw probe reading is then mapped to a lab-equivalent value
 and fed into the **same** recommender — nothing upstream changes.
 
+- **What a probe actually adds (the ceiling connection).** The yield model's honest
+  ceiling exists because the feature matrix has *no soil feature that varies within a
+  county over time* — SSURGO is one static snapshot per county, which is why it can
+  only reach corn's ~20% between-county variance and none of the ~80% year-to-year
+  (see the yield ceiling note above). A probe read at a field this season is exactly
+  that missing axis: a **time-varying** soil measurement. Calibrated onto the lab
+  scale it becomes the first feature able to speak to the within-county variance the
+  static SSURGO layer cannot touch — so the seam is where new predictive signal
+  enters, not just finer spatial resolution.
 - **No hardware dependency.** Yield, soil, and recommendation modules all run today
   with no sensor. The probe is an *optional* accuracy layer, not a prerequisite.
 - **Honesty.** No probe or probe data exists, so the demo fits on a clearly-labeled
@@ -295,6 +387,7 @@ python -m strata.soil_classifier  # soil-order classification, CV + importance
 python -m strata.yield_model      # per-crop yield regression, random vs LCO CV
 python -m strata.recommender      # cited Penn State recommendations on a field
 python -m strata.calibration      # synthetic probe->lab calibration seam demo
+python -m strata.report           # render data/processed/strata_dashboard.png
 ```
 
 ---
