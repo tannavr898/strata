@@ -38,3 +38,9 @@ earthengine-api>=1.0,<2.0 # Google Earth Engine client -> MODIS NDVI, cropland-m
 #                  would need an R install + rpy2 — NOT taken unless you want it.
 #   - Daymet: `requests` against the Single Pixel REST API returns CSV -> pandas.
 # -----------------------------------------------------------------------------
+
+# --- Testing ---
+pytest>=8.0            # `python -m pytest` from the repo root; config in pytest.ini.
+                       #   Data-backed tests SKIP when data/processed/*.csv is absent
+                       #   (those files are gitignored), so a fresh clone still runs
+                       #   the contract, leakage, and honesty tests meaningfully.

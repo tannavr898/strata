@@ -986,6 +986,61 @@ seam works, not that any probe is accurate.
 **Strata has zero dependency on hardware.** Modules A, B, and C all run today with
 no sensor. The probe is an optional accuracy layer, not a prerequisite.
 
+### 9.1 Probe channel registry (`probe.py`) — placeholder
+
+**Status: contract only.** As of 2026-08-31 the team has acquired the final sensor
+suite, so *what* the device measures is settled; *what it emits* is not. Rather
+than write a parser against a guessed serialization, `probe.py` records the
+settled part — how each channel is allowed to travel through the system — and
+raises `NotImplementedError` for the rest. Nothing in the pipeline imports it, and
+`tests/test_probe_placeholder.py` enforces that.
+
+The registry's load-bearing decision is `lab_scale`, which determines a channel's
+destination:
+
+| channel | sensor | lab scale | destination |
+|---|---|---|---|
+| `soil_moisture` | SEN0193 capacitive | — | yield model |
+| `soil_temp` | DS18B20 | — | yield model |
+| `ph` | pH probe | water pH | both |
+| `nitrogen` | NPK sensor | — | yield model |
+| `phosphorus` | NPK sensor | Mehlich-3 P *(unvalidated)* | both |
+| `potassium` | NPK sensor | Mehlich-3 K *(unvalidated)* | both |
+| `co2` | SCD40 | — | yield model |
+
+A channel with **no lab scale can never reach the rule engine**, because §8's
+thresholds are defined against specific laboratory measurements; comparing a raw
+sensor number to one would emit a cited-looking recommendation that is not real.
+Three consequences follow, each of which is a test:
+
+- **CO₂ can never be a recommendation.** It is the project's differentiator and
+  therefore the most tempting channel to overclaim, but no AASL threshold exists
+  for soil respiration. It is a yield-model feature and a trend shown to the
+  farmer, nothing more.
+- **Nitrogen is not a recommendation input.** Penn State's corn N guidance is the
+  PSNT pre-sidedress nitrate test, which this sensor does not perform.
+- **P and K claim a Mehlich-3 scale they have not yet earned.** A
+  conductivity-style NPK probe performs no Mehlich-3 extraction, so any mapping is
+  an empirical correlation onto that scale, not the same measurement. Until paired
+  lab samples validate it with an honest R², §8's "obtain a soil test" refusal
+  stands, and the claim carries a CAUTION in the registry.
+
+A calibrated pH refines the lime **trigger**, but buffer pH is a separate
+laboratory titration no field probe performs, so §8 will still decline to state a
+lime **rate**. That refusal is intended and is tested.
+
+**The open question, recorded before any number depends on it.** `readings_to_
+features` — the function that would actually address §7's ceiling — is blocked on
+a granularity decision the data must settle. The yield model is trained on
+county-year rows against a NASS county mean; probe readings are field-scale, and
+one probe in one field is not a county mean. Aggregation alone cannot fix this
+without fabricating representativeness. The two candidate resolutions are (1)
+keep the county-year model as the backbone and treat probe features as a
+documented field-level adjustment on top of its prediction, or (2) move to a
+field-year model, which requires field-level yield truth Strata does not have.
+**Whichever is chosen must be recorded here before any result derived from it is
+reported.**
+
 ---
 
 ## 10. Orchestration and the product quality gate
@@ -1217,7 +1272,33 @@ population with no `county_ansi`, dropped one step earlier — never conflate th
 | `PRODUCT_MIN_FORECAST_R2` | §10 gate table and the judgment-call paragraph |
 | `recommender.py` thresholds or `CITATIONS` | §8 rules table |
 | `calibration.py` | §9 |
+| `probe.py` channel registry or routing | §9.1 |
+| Any invariant a test encodes | §13.1, and add/adjust the test in the same commit |
 | Fixing defect §12.1 | §4 funnel, §6 **all results**, §12.1 → move to changelog |
+
+### 13.1 Executable invariants
+
+Documented rigor that nothing enforces decays silently. As of 2026-08-31 the
+invariants this document asserts are also a pytest suite (`python -m pytest`, 50
+tests, ~2s), so a regression fails loudly instead of quietly changing the numbers:
+
+| file | encodes |
+|---|---|
+| `tests/test_join_integrity.py` | §4 join funnel and §3.2 coverage: 67 soil rows, no fabricated FIPS, the 5 joint survey areas emitting one row per constituent county, 66 modeling counties, no soil column varying within a county (the §7 premise). |
+| `tests/test_feature_contracts.py` | §6 feature lists agree between `assemble.py` and `yield_model.py`; §6/§7 leakage rules (no county identity, no target-derived features, NDVI gated to ≤ July, `year` withheld in attribution mode); §5 classifier excludes coordinates and taxonomy labels. |
+| `tests/test_recommender_honesty.py` | §8 refusals: no P/K interpretation without a lab test, no lime rate without buffer pH, a predicted yield never unlocks a missing measurement, every recommendation carries a citation. |
+| `tests/test_calibration.py` | §9 mapping recovery, minimum-sample refusal, and propagation of the `synthetic` flag. |
+| `tests/test_probe_placeholder.py` | §9.1 channel routing, and that the unimplemented conversions still refuse. |
+
+**Validated against the real defect.** Replaying the pre-fix sliced-areasymbol
+logic from §12.1 against this suite trips three tests simultaneously: fabricated
+FIPS `['605', '607', '609', '610', '611']`, the 10 named missing counties, and the
+67 → 62 row count. The defect that went undetected for weeks now cannot recur
+silently.
+
+Data-backed tests **skip** when `data/processed/*.csv` is absent (those files are
+gitignored and reproduced from §3), so a fresh clone still runs the contract,
+leakage, and honesty tests meaningfully.
 
 ### Verification commands
 
@@ -1270,6 +1351,7 @@ python -m strata.report
 |---|---|
 | 2026-07-20 | Document created. Verified join funnel and variance decomposition against live data. **Discovered and documented defect §12.1** (multi-county SSURGO survey areas dropping 10 counties) and corrected the README's misattribution of those dropped FIPS to NASS pseudo-records. Added literature positioning (§11). |
 | 2026-07-24 | **Broke the feature-information ceiling with time-varying features.** Added four free within-county time-varying sources and A/B-tested each on the honest leave-counties-out *and* forward-in-time splits: sub-season **weather windows** and cropland-masked **MODIS NDVI** shipped (corn forward forecast 0.28 → 0.39 → 0.46); a **water-balance drought index** and **ERA5-Land soil moisture** were tested-null (redundant reanalyses, carried for audit only). See §7. |
+| 2026-08-31 | **Added an executable test suite (§13.1)** covering the join, feature, leakage, and refusal invariants this document asserts, validated by replaying defect §12.1 against it. Fixed a stale hardcoded result in `main.py`'s closing summary (it quoted R² 0.55/0.28 while the run printed 0.61/0.46); the summary now reports the metrics the run actually produced. Added `probe.py` (§9.1), a **placeholder** channel registry and reading contract for the acquired sensor suite — conversions raise `NotImplementedError` rather than parse a guessed device format, and nothing in the pipeline imports it. |
 | 2026-07-25 | **Fixed defect §12.1** (multi-county SSURGO → 66 counties) and **regenerated every model number** on the current shipped matrix (soil + weather windows + NDVI). Headline corn: random 0.69 / LCO 0.60 / forward 0.46. Two narrative consequences recorded honestly: the no-trend forward forecast rose from −0.42 to +0.09 (NDVI recovers the level), and **winter wheat crossed the 0.30 product gate** (0.318, now shipped). Swept all legacy figures in §3–§12 to match. |
 
 ---

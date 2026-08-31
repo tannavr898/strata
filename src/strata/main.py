@@ -57,7 +57,10 @@ def section_soil_classifier() -> None:
           "baseline),\n     which is the premise the product rests on.")
 
 
-def section_yield_model() -> None:
+def section_yield_model() -> dict:
+    """Print the yield section and RETURN its headline metrics, so the closing
+    summary quotes the numbers this run actually produced rather than a literal
+    that silently goes stale when the feature set changes."""
     _rule("2. YIELD REGRESSION  (soil+weather -> county yield, honestly)")
     from sklearn.dummy import DummyRegressor
     from sklearn.metrics import mean_absolute_error
@@ -104,6 +107,8 @@ def section_yield_model() -> None:
           "\n     a past-trained model can't see the trend, so it under-predicts future"
           "\n     years (negative R^2). Adding it ~doubles accuracy and is what a farmer"
           "\n     planning next season actually needs. Both reported; nothing hidden.")
+
+    return {"crop": headline, "lco_r2": fc_lco["r2_mean"], "forward_r2": fwd["r2"]}
 
 
 _GATE_CROPS = ["corn_grain_yield", "soybean_yield", "oats_yield", "alfalfa_hay_yield"]
@@ -201,7 +206,7 @@ def main() -> None:
     print("#" * 72)
 
     section_soil_classifier()
-    section_yield_model()
+    yield_metrics = section_yield_model()
     skills = _product_skills()
     section_product_gate(skills)
     section_recommender(skills)
@@ -211,8 +216,10 @@ def main() -> None:
     print("\nReal held-out validation throughout; thin/uncertain results are stated,")
     print("not masked. Soil is characterizable from cheap numbers; county-year yield")
     print("is forecastable well above baseline once the genetic/management trend is")
-    print("included (R^2 ~0.55 leave-counties-out, ~0.28 forward-in-time), with the")
-    print("conservative soil+weather-only attribution reported alongside it;")
+    print(f"included ({yield_metrics['crop']}: R^2 "
+          f"{yield_metrics['lco_r2']:.2f} leave-counties-out, "
+          f"{yield_metrics['forward_r2']:.2f} forward-in-time), with")
+    print("the conservative soil+weather-only attribution reported alongside it;")
     print("recommendations are cited Penn State rules, not invented; and a cheap probe")
     print("can plug in later as calibration only.")
 

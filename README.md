@@ -43,8 +43,13 @@ strata/
 │   ├── yield_model.py       # [IMPLEMENTED] YieldModel (RandomForestRegressor)
 │   ├── recommender.py       # [IMPLEMENTED] OptimizationEngine (cited Penn State rules)
 │   ├── calibration.py       # [IMPLEMENTED] cheap-probe vs lab calibration seam
+│   ├── probe.py             # [PLACEHOLDER] probe channel registry + reading contract;
+│   │                        #   conversions deliberately raise NotImplementedError
 │   ├── main.py              # [IMPLEMENTED] orchestrator + readable report
 │   └── report.py            # [IMPLEMENTED] 4-panel diagnostic dashboard PNG
+├── tests/                   # [IMPLEMENTED] pytest suite (50 tests): join integrity,
+│                            #   feature contracts, leakage guards, refusal behavior
+├── docs/                    # METHODS.md, HOW-IT-WORKS.md, grant summary, figures/
 ├── scripts/
 │   └── ee_authenticate.py   # [IMPLEMENTED] one-time Earth Engine auth (truststore-wrapped
 │                            #   so the OAuth token exchange survives Norton TLS interception)
@@ -57,7 +62,14 @@ Status: **all modules implemented and runnable**. The four data loaders, the
 analysis-table assembler, the soil classifier, the yield model, the cited
 recommender, the calibration seam, and the orchestrator all run. Results are
 recorded in the sections below; `python -m strata.main` reproduces them offline
-from `data/processed/*.csv`.
+from `data/processed/*.csv`, and `python -m pytest` guards them.
+
+The one exception is `probe.py`, which is explicitly a **placeholder**: the sensor
+suite is final and its channel routing is written down there, but the device's
+output format is not known yet, so its conversion functions raise
+`NotImplementedError` rather than parse a guessed format. Nothing in the running
+pipeline imports it — the zero-hardware-dependency claim still holds, and a test
+enforces that.
 
 ---
 
@@ -469,6 +481,37 @@ python -m strata.recommender      # cited Penn State recommendations on a field
 python -m strata.calibration      # synthetic probe->lab calibration seam demo
 python -m strata.report           # render data/processed/strata_dashboard.png
 ```
+
+---
+
+## Tests
+
+```bash
+python -m pytest        # 50 tests, ~2s
+```
+
+The suite guards the invariants that fail *silently* — the dangerous kind. Nothing
+crashes if a join drops ten counties, if county identity leaks into the feature
+matrix, or if the recommender starts inventing a fertilizer rate; the numbers just
+quietly stop being true.
+
+| file | guards |
+|---|---|
+| `test_join_integrity.py` | Every real county survives the soil join; no fabricated FIPS; the 5 joint survey areas emit one row per county; SSURGO columns are static within a county (the fact the whole ceiling argument rests on). |
+| `test_feature_contracts.py` | `assemble.py` and `yield_model.py` feature lists agree — a "kept in sync" comment cannot fail, these can. Plus leakage guards: no county identity, no target-derived features, NDVI time-gated to ≤ July, `year` excluded in attribution mode, no lat/lon in the soil classifier. |
+| `test_recommender_honesty.py` | The refusals hold: no P/K interpretation without a lab test, no lime rate without buffer pH, a predicted yield never unlocks a missing measurement, every recommendation carries a citation. |
+| `test_calibration.py` | The probe→lab mapping is recovered correctly, refuses too few pairs, and carries the `synthetic` flag through — losing that flag is how labeled fake numbers become real claims. |
+| `test_probe_placeholder.py` | Channel routing (a channel with no lab scale can never reach a cited AASL threshold) and that the unimplemented conversions still refuse. |
+
+**Verified against the real defect.** `docs/METHODS.md` §12.1 records the
+multi-county SSURGO bug that silently dropped 10 counties for weeks. Replaying the
+old sliced-areasymbol logic against this suite trips three tests at once
+(fabricated FIPS `['605', '607', '609', '610', '611']`, the 10 missing counties,
+and the 67→62 row count), so the regression cannot come back unnoticed.
+
+Data-backed tests **skip** rather than fail when `data/processed/*.csv` is absent
+(those are gitignored), so a fresh clone still gets a meaningful run of the
+contract, leakage, and honesty tests.
 
 ---
 
