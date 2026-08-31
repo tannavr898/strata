@@ -74,12 +74,68 @@ _SOIL_FEATURES = [
 ]
 
 # The weather columns carried onto each row (that year's growing season).
+# The first five are the full-season (Apr-Oct) aggregates; the rest are the WATER
+# and HEAT-STRESS stats within sub-season phenology windows (see daymet.season_windows
+# in config/sources.yaml). Only per-window PRECIP + HEAT-DAYS are carried: an A/B on
+# leave-counties-out AND forward-in-time splits showed these capture the within-year
+# timing signal (corn forward-forecast R^2 0.28 -> 0.39), while the per-window
+# mean-temp/GDD columns are collinear with the season means and only added
+# forward-generalization noise (full 20-column set fell back to forward R^2 0.28).
+# The Daymet loader still COMPUTES all five stats per window into daymet_pa_weather.csv;
+# this is the model's deliberate feature selection. Kept in sync with WEATHER_NUMERIC
+# in yield_model.py (assemble writes them; the model reads them).
 _WEATHER_FEATURES = [
     "gdd_base10",
     "precip_total_mm",
     "tmax_mean_c",
     "tmin_mean_c",
     "heat_days_30c",
+    # per-window precip (mm) + heat-stress days: Apr-May, June, July (silking), Aug-Oct
+    "precip_aprmay_mm", "heat_days_aprmay",
+    "precip_jun_mm", "heat_days_jun",
+    "precip_jul_mm", "heat_days_jul",
+    "precip_augoct_mm", "heat_days_augoct",
+]
+
+# The drought columns carried onto each row. Climatic water balance (precip minus
+# Hargreaves PET, mm) for the season + the same four phenology windows -- a
+# moisture-deficit signal that combines rain AND evaporative demand, which neither
+# precip nor temperature alone carries. These live in the SAME daymet_pa_weather.csv
+# (derived there from daily temps + latitude), so they are selected in the weather
+# join below. Kept in sync with DROUGHT_NUMERIC in yield_model.py.
+_DROUGHT_FEATURES = [
+    "waterbal_season_mm",
+    "waterbal_aprmay_mm",
+    "waterbal_jun_mm",
+    "waterbal_jul_mm",
+    "waterbal_augoct_mm",
+]
+
+# The soil-moisture columns carried onto each row (that year's growing season).
+# ERA5-Land root-zone volumetric soil moisture (m3/m3), season mean + the same four
+# phenology-window means as the weather features. This is the TIME-VARYING soil
+# signal the static SSURGO snapshot cannot supply -- the free gridded preview of the
+# probe's moisture channel. Joined on (county_ansi, year) like weather. Kept in sync
+# with SOILMOIST_NUMERIC in yield_model.py.
+_SOILMOIST_FEATURES = [
+    "soilmoist_root_season",
+    "soilmoist_root_aprmay",
+    "soilmoist_root_jun",
+    "soilmoist_root_jul",
+    "soilmoist_root_augoct",
+]
+
+# The NDVI columns carried onto each row. Cropland-masked MODIS NDVI, county-year,
+# TIME-GATED to <= July (Apr-May / Jun / Jul) so late-season greenness -- which is
+# almost the harvested yield itself -- cannot leak into the forecast. Unlike the
+# gridded weather/soil-moisture reanalyses, NDVI is a direct satellite OBSERVATION
+# of the crop (vigor, management, pest stress), so it can carry information the
+# meteorology does not. Joined on (county_ansi, year). Kept in sync with
+# NDVI_NUMERIC in yield_model.py.
+_NDVI_FEATURES = [
+    "ndvi_aprmay",
+    "ndvi_jun",
+    "ndvi_jul",
 ]
 
 
@@ -104,7 +160,11 @@ def build_analysis_table(
     nass: Optional[pd.DataFrame] = None,
     soil: Optional[pd.DataFrame] = None,
     weather: Optional[pd.DataFrame] = None,
+    soilmoist: Optional[pd.DataFrame] = None,
+    ndvi: Optional[pd.DataFrame] = None,
     drop_suppressed: bool = True,
+    include_soilmoist: bool = True,
+    include_ndvi: bool = True,
 ) -> pd.DataFrame:
     """Join NASS yields + SSURGO soil + Daymet weather into one analysis table.
 
@@ -132,6 +192,10 @@ def build_analysis_table(
         soil = _read_processed("ssurgo_pa_soil.csv")
     if weather is None:
         weather = _read_processed("daymet_pa_weather.csv")
+    if include_soilmoist and soilmoist is None:
+        soilmoist = _read_processed("openmeteo_pa_soilmoisture.csv")
+    if include_ndvi and ndvi is None:
+        ndvi = _read_processed("ndvi_pa.csv")
 
     # ------------------------------------------------------------------ NASS prep
     # "query_name" is our crop label; rename to the clearer "crop". Keep only the
@@ -177,7 +241,7 @@ def build_analysis_table(
     # ------------------------------------------------- join 2: that year's weather
     # Inner join on (FIPS, year). This is where post-coverage years (2024-2025,
     # past Daymet v4 R1) fall out — no weather row exists for them.
-    weather_cols = ["county_ansi", "year"] + _WEATHER_FEATURES
+    weather_cols = ["county_ansi", "year"] + _WEATHER_FEATURES + _DROUGHT_FEATURES
     before = len(merged)
     weather_max_year = int(weather["year"].max())
     merged = merged.merge(weather[weather_cols], on=["county_ansi", "year"], how="inner")
@@ -189,6 +253,36 @@ def build_analysis_table(
         dropped,
         weather_max_year,
     )
+
+    # -------------------------------------------- join 3: that year's soil moisture
+    # Inner join on (FIPS, year), exactly like weather. ERA5-Land soil moisture shares
+    # Daymet's 2000-2023 x 67-county coverage (same centroids), so this should drop
+    # nothing; we log it to verify rather than assume. This is the first TIME-VARYING
+    # soil feature in the table -- the axis the static SSURGO snapshot cannot supply.
+    if include_soilmoist:
+        sm_cols = ["county_ansi", "year"] + _SOILMOIST_FEATURES
+        before = len(merged)
+        merged = merged.merge(soilmoist[sm_cols], on=["county_ansi", "year"], how="inner")
+        logger.info(
+            "Join 3 (+ERA5-Land soil moisture): %d -> %d rows  (dropped %d)",
+            before, len(merged), before - len(merged),
+        )
+    else:
+        logger.info("Join 3 (soil moisture) SKIPPED (include_soilmoist=False).")
+
+    # ---------------------------------------------- join 4: that year's NDVI (satellite)
+    # Inner join on (FIPS, year). Cropland-masked MODIS NDVI, time-gated to <= July.
+    # MOD13Q1 covers 2000+ so it aligns with the panel; logged to verify no drops.
+    if include_ndvi:
+        ndvi_cols = ["county_ansi", "year"] + _NDVI_FEATURES
+        before = len(merged)
+        merged = merged.merge(ndvi[ndvi_cols], on=["county_ansi", "year"], how="inner")
+        logger.info(
+            "Join 4 (+MODIS NDVI): %d -> %d rows  (dropped %d)",
+            before, len(merged), before - len(merged),
+        )
+    else:
+        logger.info("Join 4 (NDVI) SKIPPED (include_ndvi=False).")
 
     # ----------------------------------------------- drop suppressed (NaN) targets
     if drop_suppressed:
@@ -233,7 +327,8 @@ def _report(df: pd.DataFrame) -> None:
 
     # Feature completeness — by construction this should be fully populated, but we
     # verify rather than assume (council rule: show, don't claim).
-    feat_cols = _SOIL_FEATURES + _WEATHER_FEATURES
+    feat_cols = [c for c in (_SOIL_FEATURES + _WEATHER_FEATURES + _DROUGHT_FEATURES
+                             + _SOILMOIST_FEATURES + _NDVI_FEATURES) if c in df.columns]
     miss = df[feat_cols].isna().mean() * 100
     worst = miss[miss > 0]
     if worst.empty:

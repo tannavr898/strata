@@ -76,8 +76,8 @@ def _panel_accuracy_ladder(ax, X, y, groups) -> None:
     bars = ax.bar(labels, vals, color=colors)
     ax.axhline(0, color="k", lw=0.8)
     ax.set_ylabel("R^2  (higher = better)")
-    ax.set_title("B. Accuracy ladder: the trend term is the lift\n"
-                 "(no-trend forecasting is worse than the mean)", fontsize=10)
+    ax.set_title("B. Accuracy ladder: the trend term is the biggest lift\n"
+                 "(NDVI now lifts the no-trend forward forecast above the mean)", fontsize=10)
     for b, v in zip(bars, vals):
         off = 0.02 if v >= 0 else -0.06
         ax.text(b.get_x() + b.get_width() / 2, v + off, f"{v:.2f}",

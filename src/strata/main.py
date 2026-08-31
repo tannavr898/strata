@@ -211,7 +211,7 @@ def main() -> None:
     print("\nReal held-out validation throughout; thin/uncertain results are stated,")
     print("not masked. Soil is characterizable from cheap numbers; county-year yield")
     print("is forecastable well above baseline once the genetic/management trend is")
-    print("included (R^2 ~0.5 leave-counties-out, ~0.35 forward-in-time), with the")
+    print("included (R^2 ~0.55 leave-counties-out, ~0.28 forward-in-time), with the")
     print("conservative soil+weather-only attribution reported alongside it;")
     print("recommendations are cited Penn State rules, not invented; and a cheap probe")
     print("can plug in later as calibration only.")

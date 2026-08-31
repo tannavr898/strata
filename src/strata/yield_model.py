@@ -112,12 +112,32 @@ class YieldModel:
         "topsoil_ph", "topsoil_om_pct", "topsoil_cec",
     ]
     SOIL_CATEGORICAL = ["dominant_taxorder", "dominant_drainage"]
-    # That year's growing-season (Apr-Oct) weather features.
+    # That year's weather. First five: full-season (Apr-Oct) aggregates. The rest:
+    # per-window WATER (precip) + HEAT-STRESS (heat-days) for four phenology windows
+    # (Apr-May / Jun / Jul silking / Aug-Oct), so the model can see WHEN drought/heat
+    # fell -- the within-year timing a season total averages away. Only precip+heat_days
+    # are kept: an A/B on leave-counties-out AND forward-in-time splits showed they hold
+    # the signal (corn forward R^2 0.28 -> 0.39) while per-window mean-temp/GDD were
+    # collinear noise that hurt the forward forecast. Kept in sync with assemble.py's
+    # _WEATHER_FEATURES (assemble writes them; the model selects them here).
     WEATHER_NUMERIC = [
         "gdd_base10", "precip_total_mm", "tmax_mean_c", "tmin_mean_c", "heat_days_30c",
+        "precip_aprmay_mm", "heat_days_aprmay",
+        "precip_jun_mm", "heat_days_jun",
+        "precip_jul_mm", "heat_days_jul",
+        "precip_augoct_mm", "heat_days_augoct",
     ]
+    # Cropland-masked MODIS NDVI, county-year, TIME-GATED to <= July so late-season
+    # greenness (almost the harvested yield itself) cannot leak into the forecast. Only
+    # Jun + Jul: an A/B on leave-counties-out AND forward-in-time splits showed these two
+    # give the best forward forecast (corn forward R^2 0.39 -> 0.46), while adding the
+    # Apr-May window (mostly bare soil / cover crop, pre-emergence) only added forward
+    # noise. NDVI is the one source that helped: unlike the gridded weather/soil-moisture
+    # reanalyses (which are meteorology-derived and proved redundant here -- see the
+    # rejected-features note), NDVI is a direct satellite OBSERVATION of the crop.
+    NDVI_NUMERIC = ["ndvi_jun", "ndvi_jul"]
 
-    NUMERIC_FEATURES = SOIL_NUMERIC + WEATHER_NUMERIC
+    NUMERIC_FEATURES = SOIL_NUMERIC + WEATHER_NUMERIC + NDVI_NUMERIC
     CATEGORICAL_FEATURES = SOIL_CATEGORICAL
     FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
