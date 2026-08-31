@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}{{ field.name }} — Strata{% endblock %}
+
+{% block content %}
+<h1>{{ field.name }}</h1>
+<p class="sub">
+  {{ field.county_name }} County &middot; {{ field.crop|crop }}
+  {% if field.acres %}&middot; {{ field.acres }} acres{% endif %}
+</p>
+
+<!-- ── Yield ──────────────────────────────────────────────────────────── -->
+<section class="card">
+  <h2>Expected yield</h2>
+
+  {% set p = prediction %}
+  {% if p.state == 'ok' %}
+    <p class="figure">{{ "%.0f"|format(p.value) }} <span class="unit">{{ p.unit }}</span></p>
+    <p class="give">Typically within &plusmn;{{ "%.1f"|format(p.mae) }} {{ p.unit }}
+      of the actual harvest.</p>
+    <p class="caveat">
+      <strong>This is a county-scale estimate.</strong> It is what {{ field.county_name }}
+      County yields under {{ p.conditions_year }} conditions &mdash; the most recent season
+      with complete weather and satellite data. Your field can differ from the county,
+      and Strata has no field-level yield data to say by how much.
+    </p>
+    {% if details %}
+      <div class="dev">
+        <code>{{ p.crop }}</code> &middot; leave-counties-out R&sup2;
+        {{ "%.3f"|format(p.forecast.forecast_r2) }} &middot;
+        MAE {{ "%.2f"|format(p.forecast.forecast_mae) }} &middot;
+        {{ p.forecast.n_rows }} county-years / {{ p.forecast.n_counties }} counties &middot;
+        predicted at year={{ p.conditions_year }}
+      </div>
+    {% endif %}
+
+  {% elif p.state == 'withheld' %}
+    <p class="state-withheld">No estimate for this crop</p>
+    <p class="give">
+      Strata will not give you a yield number for
+      {{ p.crop|crop }}. Tested against counties it had
+      never seen, the model was not reliably better than simply quoting the county
+      average &mdash; so a number here would look precise without being trustworthy.
+    </p>
+    {% if details %}
+      <div class="dev">{{ p.message }}</div>
+    {% endif %}
+
+  {% elif p.state == 'no_county_data' %}
+    <p class="state-withheld">No data for this county</p>
+    <p class="give">USDA NASS does not publish a
+      {{ p.crop|crop }} series for
+      {{ field.county_name }} County, so there is nothing to predict from.</p>
+
+  {% elif p.state == 'no_models' %}
+    <p class="state-withheld">Models not built</p>
+    <p class="give">Run <code>python scripts/build_models.py</code>, then reload.</p>
+
+  {% else %}
+    <p class="state-withheld">No model for this crop</p>
+    <p class="give">Strata has not built a model for
+      <code>{{ p.crop }}</code>.</p>
+  {% endif %}
+</section>
+
+<!-- ── Recommendations ────────────────────────────────────────────────── -->
+<section class="card">
+  <h2>What to add</h2>
+
+  {% if not lab %}
+    <p class="state-needs">No soil test on file</p>
+    <p class="give">
+      Strata cannot tell you what to add without a laboratory soil test. County soil
+      survey data carries pH and organic matter, but not the phosphorus, potassium,
+      and buffer pH numbers the Penn State rules need. Add an AASL report to get
+      quantified advice.
+    </p>
+  {% else %}
+    <p class="sub">
+      From your {{ lab.sampled_at }} soil test{% if lab.lab_name %} ({{ lab.lab_name }}){% endif %}.
+      {% if lab.notes and 'ILLUSTRATIVE' in lab.notes %}
+        <span class="tag synthetic">Demo values</span>
+      {% endif %}
+    </p>
+
+    {% for r in recommendations %}
+      <article class="rec rec-{{ r.severity }}">
+        <div class="rec-head">
+          <span class="rec-cat">{{ r.category }}</span>
+          <span class="tag sev-{{ r.severity }}">
+            {% if r.severity == 'unknown' %}needs lab test{% else %}{{ r.severity }}{% endif %}
+          </span>
+        </div>
+        <p class="rec-measured">{{ r.measured }}</p>
+        <p class="rec-finding">{{ r.finding|crop }}</p>
+        <p class="rec-action">{{ r.action|crop }}</p>
+        {% if r.amount %}
+          <p class="rec-amount">{{ r.amount|crop }}</p>
+        {% endif %}
+        <details class="cite">
+          <summary>Why &mdash; {{ r.citation.source }}</summary>
+          <p>{{ r.citation.rule }}</p>
+        </details>
+      </article>
+    {% endfor %}
+  {% endif %}
+</section>
+
+<!-- ── Probe data ─────────────────────────────────────────────────────── -->
+<section class="card">
+  <h2>Soil readings</h2>
+
+  {% if not channels %}
+    <p class="give">No probe readings yet.</p>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr><th>Measurement</th><th>Readings</th><th>From</th><th>To</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+      {% for c in channels %}
+        {% set meta = channel_meta.get(c.channel) %}
+        <tr>
+          <td>{{ c.channel|replace('_',' ') }}
+            {% if details and meta %}<span class="dev-inline">{{ meta.sensor }}</span>{% endif %}
+          </td>
+          <td>{{ c.n }}</td>
+          <td>{{ c.first_at[:10] }}</td>
+          <td>{{ c.last_at[:10] }}</td>
+          <td>
+            {% if c.n_uncalibrated == c.n %}
+              <span class="tag uncal">uncalibrated</span>
+            {% elif c.n_uncalibrated %}
+              <span class="tag uncal">{{ c.n_uncalibrated }} uncalibrated</span>
+            {% else %}
+              <span class="tag ok">calibrated</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="give">
+      <strong>Uncalibrated</strong> means the raw sensor number has not been tied to a
+      laboratory scale yet, so it shows a trend over time but is not a lab-equivalent
+      value and never feeds a fertilizer recommendation.
+    </p>
+  {% endif %}
+
+  {% if sites %}
+    <div class="sites">
+      {% for s in sites %}
+        <a class="site" href="/field/{{ field.id }}/site/{{ s.id }}{% if details %}?details=true{% endif %}">
+          <span class="site-label">{{ s.label }}</span>
+          {% if s.notes %}<span class="site-note">{{ s.notes }}</span>{% endif %}
+          {% if s.lat %}<span class="site-geo">{{ "%.4f"|format(s.lat) }}, {{ "%.4f"|format(s.lon) }}</span>{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+{% if details and field.notes %}
+  <div class="dev">{{ field.notes }}</div>
+{% endif %}
+{% endblock %}

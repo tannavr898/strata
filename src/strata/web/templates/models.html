@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Models — Strata{% endblock %}
+
+{% block content %}
+<h1>Model card</h1>
+<p class="sub">
+  Every crop Strata evaluated, and whether it is trustworthy enough to show.
+</p>
+
+{% if not forecasts %}
+  <p class="give">No models built. Run <code>python scripts/build_models.py</code>.</p>
+{% else %}
+<section class="card">
+  <p class="give">
+    Each score is <strong>leave-counties-out</strong>: the model is tested on counties
+    it never saw in training, which is what a new farm actually gets. A crop is shown
+    to farmers only if it clears R&sup2; {{ "%.2f"|format(threshold) }} &mdash; below
+    that, a prediction is no better than quoting the county average, so Strata says so
+    instead of printing a number.
+  </p>
+
+  <table class="grid">
+    <thead>
+      <tr><th>Crop</th><th>R&sup2;</th><th>Typical error</th>
+          <th>Trained on</th><th>Shown?</th></tr>
+    </thead>
+    <tbody>
+    {% for f in forecasts %}
+      <tr class="{% if not f.shipped %}row-withheld{% endif %}">
+        <td>{{ f.crop|crop }}</td>
+        <td>{{ "%.3f"|format(f.forecast_r2) }}</td>
+        <td>&plusmn;{{ "%.2f"|format(f.forecast_mae) }} {{ f.unit.lower() }}</td>
+        <td>{{ f.n_rows }} county-years, {{ f.n_counties }} counties</td>
+        <td>
+          {% if f.shipped %}<span class="tag ok">shown</span>
+          {% else %}<span class="tag withheld">withheld</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Why some crops are withheld</h2>
+  {% for f in forecasts if not f.shipped %}
+    <p class="give"><strong>{{ f.crop|crop }}</strong>
+      &mdash; {{ f.message|crop }}</p>
+  {% else %}
+    <p class="give">Every evaluated crop currently clears the gate.</p>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

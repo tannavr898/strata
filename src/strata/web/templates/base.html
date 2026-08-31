@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Strata{% endblock %}</title>
+  <link rel="stylesheet" href="/static/strata.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">Strata</a>
+  <nav>
+    <a href="/">Fields</a>
+    <a href="/models">Models</a>
+    {% if details %}
+      <a class="toggle on" href="?details=false">Details: on</a>
+    {% else %}
+      <a class="toggle" href="?details=true">Details: off</a>
+    {% endif %}
+  </nav>
+</header>
+
+{% if startup_error %}
+  <div class="banner error">
+    <strong>No models built.</strong>
+    <span>{{ startup_error }}</span>
+  </div>
+{% elif stale %}
+  <div class="banner warn">
+    <strong>Models are stale.</strong>
+    <span>The analysis table changed since these models were built.
+      Re-run <code>python scripts/build_models.py</code>.</span>
+  </div>
+{% endif %}
+
+<main>
+  {% block content %}{% endblock %}
+</main>
+
+<footer>
+  {% if manifest %}
+    <p>
+      Models built {{ manifest.built_at[:10] }} from {{ "{:,}".format(manifest.table_rows) }}
+      county-year rows (table <code>{{ manifest.table_hash }}</code>),
+      gate R&sup2; &ge; {{ "%.2f"|format(manifest.gate_threshold) }}, seed {{ manifest.seed }}.
+    </p>
+  {% endif %}
+  <p class="muted">
+    County-scale public data. Recommendations cite Penn State AASL rules and must be
+    confirmed against your current AASL report before field use.
+  </p>
+</footer>
+</body>
+</html>

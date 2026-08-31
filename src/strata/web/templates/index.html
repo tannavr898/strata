@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Fields — Strata{% endblock %}
+
+{% block content %}
+<h1>Fields</h1>
+{% if not fields %}
+  <p class="give">No fields yet. Run <code>python scripts/seed_db.py</code> to create a demo field.</p>
+{% else %}
+  <div class="sites">
+    {% for f in fields %}
+      <a class="site" href="/field/{{ f.id }}{% if details %}?details=true{% endif %}">
+        <span class="site-label">{{ f.name }}</span>
+        <span class="site-note">{{ f.county_name }} County &middot;
+          {{ f.crop|crop }}</span>
+        {% if f.acres %}<span class="site-geo">{{ f.acres }} acres</span>{% endif %}
+      </a>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}

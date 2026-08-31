@@ -89,14 +89,28 @@ _KEY_DTYPE = {"county_ansi": "string"}
 
 @dataclass(frozen=True)
 class ProductForecast:
-    """One crop's product-gate decision. `forecast_r2` is the honest leave-counties-
-    out forecast skill; `shipped` is whether it clears the quality threshold; `message`
-    is the human-readable verdict (the insufficient-skill notice when withheld)."""
+    """One crop's product-gate decision, plus the metrics behind it.
+
+    `forecast_r2` is the honest leave-counties-out forecast skill; `shipped` is
+    whether it clears the quality threshold; `message` is the human-readable verdict
+    (the insufficient-skill notice when withheld).
+
+    `forecast_mae` and the dataset shape ride along because every caller wanted them
+    and each was re-running the SAME expensive cross-validation to get them --
+    main.py computed corn's LCO CV once for its report and again for the gate, and
+    report.py a third time. One CV now produces all of it. `forecast_mae` is also
+    what a user-facing surface should quote: "+/- 15 bu/acre" means something to a
+    farmer in a way R^2 does not.
+    """
     crop: str
     forecast_r2: float
     threshold: float
     shipped: bool
     message: str
+    forecast_mae: float = float("nan")
+    unit: str = ""
+    n_rows: int = 0
+    n_counties: int = 0
 
 
 class YieldModel:
@@ -320,9 +334,18 @@ class YieldModel:
         product only; research reporting still covers every crop.
         """
         threshold = cls.PRODUCT_MIN_FORECAST_R2 if threshold is None else threshold
+        if table is None:
+            table = cls.load_table()
         X, y, groups = cls.prepare_dataset(crop, table)
-        r2 = YieldModel().cross_validate_by_county(X, y, groups)["r2_mean"]
-        shipped = r2 >= threshold
+        scores = YieldModel().cross_validate_by_county(X, y, groups)
+        # Coerce out of numpy scalars. sklearn hands back np.float64 and the
+        # comparison below yields np.bool_, neither of which json.dumps accepts --
+        # so an un-coerced ProductForecast is silently un-serializable until the
+        # artifact build tries to write it.
+        r2 = float(scores["r2_mean"])
+        unit_col = table.loc[table["crop"] == crop, "unit_desc"]
+        unit = str(unit_col.iloc[0]) if len(unit_col) else ""
+        shipped = bool(r2 >= threshold)
         if shipped:
             message = (f"{crop}: forecast shipped "
                        f"(leave-counties-out R^2 {r2:.2f} >= {threshold:.2f} gate).")
@@ -331,7 +354,11 @@ class YieldModel:
                        f"forecast R^2 {r2:.2f} < {threshold:.2f} gate -- no yield "
                        f"forecast is offered for this crop (it would be no better than "
                        f"quoting the county-average yield).")
-        return ProductForecast(crop, r2, threshold, shipped, message)
+        return ProductForecast(
+            crop=crop, forecast_r2=r2, threshold=threshold, shipped=shipped,
+            message=message, forecast_mae=float(scores["mae_mean"]), unit=unit,
+            n_rows=len(y), n_counties=int(groups.nunique()),
+        )
 
 
 def _fmt(scores: dict, unit: str) -> str:

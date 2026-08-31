@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ site.label }} — {{ field.name }}{% endblock %}
+
+{% block content %}
+<p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
+<h1>{{ site.label }}</h1>
+<p class="sub">
+  {% if site.notes %}{{ site.notes }}{% endif %}
+  {% if site.lat %}&middot; {{ "%.4f"|format(site.lat) }}, {{ "%.4f"|format(site.lon) }}{% endif %}
+</p>
+
+<nav class="chips">
+  {% for c in channels %}
+    <a class="chip {% if c == channel %}on{% endif %}"
+       href="/field/{{ field.id }}/site/{{ site.id }}?channel={{ c }}{% if details %}&details=true{% endif %}">
+      {{ c|replace('_',' ') }}
+    </a>
+  {% endfor %}
+</nav>
+
+<section class="card">
+  <div class="tags">
+    {% if any_synthetic %}<span class="tag synthetic">synthetic data</span>{% endif %}
+    {% if any_uncalibrated %}<span class="tag uncal">uncalibrated</span>{% endif %}
+  </div>
+
+  {% if sparkline.empty %}
+    <p class="give">Not enough readings to plot.</p>
+  {% else %}
+    <svg class="spark" viewBox="0 0 {{ sparkline.width }} {{ sparkline.height }}"
+         role="img" aria-label="{{ channel }} over time">
+      <path d="{{ sparkline.path }}" fill="none" stroke="currentColor" stroke-width="2"/>
+      {% for d in sparkline.dots %}
+        <circle cx="{{ d.x }}" cy="{{ d.y }}" r="3"><title>{{ d.v }}</title></circle>
+      {% endfor %}
+    </svg>
+    <p class="axis">
+      <span>{{ points[0].t[:10] }}</span>
+      <span>range {{ "%.1f"|format(sparkline.lo) }} &ndash; {{ "%.1f"|format(sparkline.hi) }}</span>
+      <span>{{ points[-1].t[:10] }}</span>
+    </p>
+  {% endif %}
+
+  {% if channel_meta %}
+    <p class="give">
+      <strong>{{ channel|replace('_',' ')|capitalize }}</strong> &mdash;
+      {{ channel_meta.units }}, {{ channel_meta.sensor }}.
+      {% if channel_meta.lab_scale %}
+        Calibrates onto {{ channel_meta.lab_scale }}.
+      {% else %}
+        No laboratory equivalent, so this is a trend over time rather than a
+        lab-comparable number, and it never feeds a fertilizer recommendation.
+      {% endif %}
+    </p>
+    {% if details %}<div class="dev">{{ channel_meta.note }}</div>{% endif %}
+  {% endif %}
+</section>
+
+{% if details %}
+<section class="card">
+  <h2>Raw readings</h2>
+  <table class="grid">
+    <thead><tr><th>Taken</th><th>Raw</th><th>Calibrated</th><th>Source</th></tr></thead>
+    <tbody>
+      {% for p in points %}
+        <tr>
+          <td>{{ p.t|replace('T',' ') }}</td>
+          <td>{{ p.raw }}</td>
+          <td>{% if p.calibrated is none %}<span class="muted">&mdash;</span>{% else %}{{ p.calibrated }}{% endif %}</td>
+          <td>{{ p.source }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

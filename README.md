@@ -45,12 +45,18 @@ strata/
 │   ├── calibration.py       # [IMPLEMENTED] cheap-probe vs lab calibration seam
 │   ├── probe.py             # [PLACEHOLDER] probe channel registry + reading contract;
 │   │                        #   conversions deliberately raise NotImplementedError
+│   ├── artifacts.py         # [IMPLEMENTED] fit models once -> data/models/, serve fast
+│   ├── db.py                # [IMPLEMENTED] SQLite: fields, sites, readings, lab tests
+│   ├── web/                 # [IMPLEMENTED] FastAPI + Jinja app (farmer-facing)
 │   ├── main.py              # [IMPLEMENTED] orchestrator + readable report
 │   └── report.py            # [IMPLEMENTED] 4-panel diagnostic dashboard PNG
 ├── tests/                   # [IMPLEMENTED] pytest suite (50 tests): join integrity,
 │                            #   feature contracts, leakage guards, refusal behavior
 ├── docs/                    # METHODS.md, HOW-IT-WORKS.md, grant summary, figures/
 ├── scripts/
+│   ├── build_models.py      # [IMPLEMENTED] fit + evaluate every crop -> data/models/
+│   ├── seed_db.py           # [IMPLEMENTED] create data/strata.db with demo fields
+│   ├── run_app.py           # [IMPLEMENTED] start the web app
 │   └── ee_authenticate.py   # [IMPLEMENTED] one-time Earth Engine auth (truststore-wrapped
 │                            #   so the OAuth token exchange survives Norton TLS interception)
 ├── requirements.txt         # + earthengine-api (NDVI source; only that loader imports it)
@@ -484,10 +490,57 @@ python -m strata.report           # render data/processed/strata_dashboard.png
 
 ---
 
+## The app
+
+A farmer-facing web app over the same models, plus a **details toggle** that
+doubles as the prototyping view.
+
+```bash
+python scripts/build_models.py   # fit every crop once (minutes) -> data/models/
+python scripts/seed_db.py        # create data/strata.db with two demo fields
+python scripts/run_app.py        # http://127.0.0.1:8000
+```
+
+FastAPI + Jinja + SQLite, server-rendered, **no npm and no build step** — the
+whole project stays one language. Nothing in the analysis pipeline imports any of
+it, so the research code runs exactly as before.
+
+**Why a build step.** A full `python -m strata.main` takes ~4 minutes, nearly all
+of it cross-validation, so a request can never fit a model. `artifacts.py` moves
+that to `scripts/build_models.py`, which fits and evaluates each crop **once** and
+writes the pipelines plus their honest metrics to `data/models/`. Every surface
+then reads the same artifacts and cannot disagree with the others — the stale
+number bug this project already hit once becomes structurally impossible. Each
+build records the analysis table's content hash, so a stale artifact is *detected*
+(`Artifacts.is_stale()`) rather than silently trusted.
+
+**The honesty states.** These are why this is not a generic dashboard, and they
+are what the app tests actually guard:
+
+| state | shown when |
+|---|---|
+| **WITHHELD** | the crop is below the product gate — an answer, sized like one, not an empty box |
+| **NEEDS LAB TEST** | Mehlich-3 P/K absent, so no rate can be quantified |
+| **SYNTHETIC** | seeded or demo data, never a finding |
+| **UNCALIBRATED** | a raw probe reading with no probe→lab mapping behind it |
+| **COUNTY-SCALE** | attached to every prediction |
+
+That last one is the one most easily lost. The moment a number appears under a
+heading that names someone's field, the UI has implicitly made the field-level
+claim `docs/METHODS.md` §12.2 says the model does not support — so the caveat
+lives in the prediction component itself, not in a footnote.
+
+The seed creates two fields on purpose: **North Field** (corn, full lab test,
+readings) is the happy path, and **Back Lot** (oats, no lab test) renders WITHHELD
+and NEEDS LAB TEST at once. A prototype where every path succeeds hides exactly
+the screens this product is unusual for.
+
+---
+
 ## Tests
 
 ```bash
-python -m pytest        # 50 tests, ~2s
+python -m pytest        # 63 tests, ~35s
 ```
 
 The suite guards the invariants that fail *silently* — the dangerous kind. Nothing
@@ -502,6 +555,7 @@ quietly stop being true.
 | `test_recommender_honesty.py` | The refusals hold: no P/K interpretation without a lab test, no lime rate without buffer pH, a predicted yield never unlocks a missing measurement, every recommendation carries a citation. |
 | `test_calibration.py` | The probe→lab mapping is recovered correctly, refuses too few pairs, and carries the `synthetic` flag through — losing that flag is how labeled fake numbers become real claims. |
 | `test_probe_placeholder.py` | Channel routing (a channel with no lab scale can never reach a cited AASL threshold) and that the unimplemented conversions still refuse. |
+| `test_web_app.py` | The honesty states survive contact with a UI: a withheld crop shows no number, a field with no lab test gets no rate, the county-scale caveat rides with every prediction, synthetic and uncalibrated data stay marked, and raw NASS crop keys never reach the page. |
 
 **Verified against the real defect.** `docs/METHODS.md` §12.1 records the
 multi-county SSURGO bug that silently dropped 10 counties for weeks. Replaying the

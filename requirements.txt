@@ -44,3 +44,13 @@ pytest>=8.0            # `python -m pytest` from the repo root; config in pytest
                        #   Data-backed tests SKIP when data/processed/*.csv is absent
                        #   (those files are gitignored), so a fresh clone still runs
                        #   the contract, leakage, and honesty tests meaningfully.
+
+# --- Web app (src/strata/web) ---
+# The app is a thin read layer over the models and the SQLite database. Server-
+# rendered Jinja, no npm and no build step, so the whole project stays one
+# language. Nothing in the analysis pipeline imports any of these.
+fastapi>=0.115         # routes + request handling
+uvicorn[standard]>=0.30 # the dev/prod server (scripts/run_app.py)
+jinja2>=3.1            # HTML templates
+joblib>=1.3            # persists the fitted models (scripts/build_models.py)
+httpx2                 # only for fastapi.testclient in tests/test_web_app.py

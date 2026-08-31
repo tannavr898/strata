@@ -238,51 +238,36 @@ def build_analysis_table(
         dropped_counties,
     )
 
-    # ------------------------------------------------- join 2: that year's weather
-    # Inner join on (FIPS, year). This is where post-coverage years (2024-2025,
-    # past Daymet v4 R1) fall out — no weather row exists for them.
-    weather_cols = ["county_ansi", "year"] + _WEATHER_FEATURES + _DROUGHT_FEATURES
-    before = len(merged)
-    weather_max_year = int(weather["year"].max())
-    merged = merged.merge(weather[weather_cols], on=["county_ansi", "year"], how="inner")
-    dropped = before - len(merged)
-    logger.info(
-        "Join 2 (+Daymet weather): %d -> %d rows  (dropped %d; weather coverage ends %d)",
-        before,
-        len(merged),
-        dropped,
-        weather_max_year,
-    )
-
-    # -------------------------------------------- join 3: that year's soil moisture
-    # Inner join on (FIPS, year), exactly like weather. ERA5-Land soil moisture shares
-    # Daymet's 2000-2023 x 67-county coverage (same centroids), so this should drop
-    # nothing; we log it to verify rather than assume. This is the first TIME-VARYING
-    # soil feature in the table -- the axis the static SSURGO snapshot cannot supply.
-    if include_soilmoist:
-        sm_cols = ["county_ansi", "year"] + _SOILMOIST_FEATURES
+    # ------------------------------------ joins 2-4: that year's time-varying data
+    # All three are the SAME operation -- inner join on (FIPS, year) -- so they run
+    # through one helper rather than three near-identical copies. They differ only in
+    # which frame, which columns, and what a drop would MEAN, which is why each is
+    # logged separately:
+    #   weather      Daymet. The one join expected to drop rows: Daymet v4 R1 ends
+    #                2023 while NASS runs to 2025, so post-coverage years fall out.
+    #   soilmoist    ERA5-Land. Shares Daymet's centroids and 2000-2023 span, so a
+    #                drop here means a coverage regression, not an expected loss.
+    #   ndvi         MODIS MOD13Q1, cropland-masked, time-gated to <= July. Same.
+    # Soil moisture and NDVI are optional so the ablation A/Bs (README) can rebuild
+    # the table without them.
+    timevarying = [
+        ("Daymet weather", weather, _WEATHER_FEATURES + _DROUGHT_FEATURES, True),
+        ("ERA5-Land soil moisture", soilmoist, _SOILMOIST_FEATURES, include_soilmoist),
+        ("MODIS NDVI", ndvi, _NDVI_FEATURES, include_ndvi),
+    ]
+    for i, (label, frame, features, included) in enumerate(timevarying, start=2):
+        if not included:
+            logger.info("Join %d (%s) SKIPPED.", i, label)
+            continue
         before = len(merged)
-        merged = merged.merge(soilmoist[sm_cols], on=["county_ansi", "year"], how="inner")
-        logger.info(
-            "Join 3 (+ERA5-Land soil moisture): %d -> %d rows  (dropped %d)",
-            before, len(merged), before - len(merged),
+        merged = merged.merge(
+            frame[["county_ansi", "year"] + features],
+            on=["county_ansi", "year"], how="inner",
         )
-    else:
-        logger.info("Join 3 (soil moisture) SKIPPED (include_soilmoist=False).")
-
-    # ---------------------------------------------- join 4: that year's NDVI (satellite)
-    # Inner join on (FIPS, year). Cropland-masked MODIS NDVI, time-gated to <= July.
-    # MOD13Q1 covers 2000+ so it aligns with the panel; logged to verify no drops.
-    if include_ndvi:
-        ndvi_cols = ["county_ansi", "year"] + _NDVI_FEATURES
-        before = len(merged)
-        merged = merged.merge(ndvi[ndvi_cols], on=["county_ansi", "year"], how="inner")
         logger.info(
-            "Join 4 (+MODIS NDVI): %d -> %d rows  (dropped %d)",
-            before, len(merged), before - len(merged),
+            "Join %d (+%s): %d -> %d rows  (dropped %d; coverage ends %d)",
+            i, label, before, len(merged), before - len(merged), int(frame["year"].max()),
         )
-    else:
-        logger.info("Join 4 (NDVI) SKIPPED (include_ndvi=False).")
 
     # ----------------------------------------------- drop suppressed (NaN) targets
     if drop_suppressed:

@@ -22,3 +22,10 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# Model artifacts. Reproducible with `python scripts/build_models.py`; large
+# binaries that would bloat history, so they are built, not committed.
+data/models/
+
+# App database (a running instance's own data, not source).
+data/strata.db

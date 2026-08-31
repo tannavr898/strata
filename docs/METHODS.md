@@ -1098,6 +1098,61 @@ for print, export via the Mermaid Live Editor or `mermaid-cli`.
 
 ---
 
+### 10.1 Serving layer and the app
+
+**Added 2026-08-31.** Orchestration above describes `main.py`, which cross-validates
+live. The app cannot: a full run takes about four minutes, essentially all of it
+cross-validation. Three entry points were also independently recomputing the same
+numbers — `main.py` cross-validated corn once for its report and again for the
+product gate, and `report.py` a third time.
+
+`artifacts.py` resolves both. `scripts/build_models.py` fits and evaluates every
+crop **once**, writing the fitted pipelines and their metrics to `data/models/`;
+`Artifacts.load()` reads them in milliseconds. `ProductForecast` now carries the
+MAE and dataset shape alongside the gate decision, so one cross-validation
+produces everything its callers used to recompute.
+
+Two properties matter methodologically:
+
+- **One source of truth.** Every surface reads the same artifacts, so they cannot
+  disagree. The stale-number defect this project hit once — `main.py` quoting
+  R² 0.55 while the run printed 0.61 — becomes structurally impossible rather
+  than something a reviewer has to notice.
+- **Staleness is detected, not assumed.** Each manifest records the analysis
+  table's content hash, build time, seed, and gate threshold.
+  `Artifacts.is_stale()` compares that hash against the table on disk, and the app
+  shows a banner rather than serving quietly outdated predictions.
+
+The served model is refit on all rows after evaluation, which is standard, but the
+honest skill estimate remains the leave-counties-out number measured on held-out
+counties. The two travel together in one artifact so they cannot be separated.
+
+**What the app must preserve.** The app is a display layer over §6, §8, and §10,
+and the risk it introduces is specific: a UI makes it trivial to render a
+confident number where the pipeline deliberately produced a refusal. Five states
+are therefore first-class and test-enforced (`tests/test_web_app.py`):
+
+| state | source |
+|---|---|
+| WITHHELD | §10 product gate |
+| NEEDS LAB TEST | §8 input honesty |
+| SYNTHETIC | project rule on generated data |
+| UNCALIBRATED | §9 — a raw reading with no fitted probe→lab mapping |
+| COUNTY-SCALE | §12.2 — the granularity limitation |
+
+The last is the one a UI most easily erases. Displaying a prediction under a
+heading that names a specific field is *itself* a field-level claim, which §12.2
+says the model does not support. The caveat is therefore rendered as part of the
+prediction component rather than as page-level fine print, and a test asserts its
+presence.
+
+**Prediction inputs.** A future season's weather and NDVI do not exist, so the app
+predicts at the latest observed county-year conditions (currently 2023, where
+Daymet coverage ends) and says so on screen. This is a "what this county yields
+under recent conditions" figure, not a forecast of an unobserved season.
+
+---
+
 ## 11. Impact, contribution, and relation to prior work
 
 ### The honest positioning
@@ -1274,6 +1329,8 @@ population with no `county_ansi`, dropped one step earlier — never conflate th
 | `calibration.py` | §9 |
 | `probe.py` channel registry or routing | §9.1 |
 | Any invariant a test encodes | §13.1, and add/adjust the test in the same commit |
+| `artifacts.py` or the build step | §10.1 |
+| `web/` templates or the honesty states | §10.1 and `tests/test_web_app.py` |
 | Fixing defect §12.1 | §4 funnel, §6 **all results**, §12.1 → move to changelog |
 
 ### 13.1 Executable invariants
@@ -1351,6 +1408,7 @@ python -m strata.report
 |---|---|
 | 2026-07-20 | Document created. Verified join funnel and variance decomposition against live data. **Discovered and documented defect §12.1** (multi-county SSURGO survey areas dropping 10 counties) and corrected the README's misattribution of those dropped FIPS to NASS pseudo-records. Added literature positioning (§11). |
 | 2026-07-24 | **Broke the feature-information ceiling with time-varying features.** Added four free within-county time-varying sources and A/B-tested each on the honest leave-counties-out *and* forward-in-time splits: sub-season **weather windows** and cropland-masked **MODIS NDVI** shipped (corn forward forecast 0.28 → 0.39 → 0.46); a **water-balance drought index** and **ERA5-Land soil moisture** were tested-null (redundant reanalyses, carried for audit only). See §7. |
+| 2026-08-31 | **Added the serving layer and the web app (§10.1).** `artifacts.py` + `scripts/build_models.py` fit and evaluate each crop once into `data/models/`, replacing three independent recomputations of the same cross-validation; `ProductForecast` now carries MAE and dataset shape so one CV serves every caller. Added `db.py` (SQLite: fields, sites, readings, lab tests) and a FastAPI/Jinja app whose five honesty states are test-enforced. Collapsed `assemble.py`'s three copy-pasted county-year joins into one loop, verified byte-identical against the previous table. |
 | 2026-08-31 | **Added an executable test suite (§13.1)** covering the join, feature, leakage, and refusal invariants this document asserts, validated by replaying defect §12.1 against it. Fixed a stale hardcoded result in `main.py`'s closing summary (it quoted R² 0.55/0.28 while the run printed 0.61/0.46); the summary now reports the metrics the run actually produced. Added `probe.py` (§9.1), a **placeholder** channel registry and reading contract for the acquired sensor suite — conversions raise `NotImplementedError` rather than parse a guessed device format, and nothing in the pipeline imports it. |
 | 2026-07-25 | **Fixed defect §12.1** (multi-county SSURGO → 66 counties) and **regenerated every model number** on the current shipped matrix (soil + weather windows + NDVI). Headline corn: random 0.69 / LCO 0.60 / forward 0.46. Two narrative consequences recorded honestly: the no-trend forward forecast rose from −0.42 to +0.09 (NDVI recovers the level), and **winter wheat crossed the 0.30 product gate** (0.318, now shipped). Swept all legacy figures in §3–§12 to match. |
 

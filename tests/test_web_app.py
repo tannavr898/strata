@@ -1,0 +1,167 @@
+"""The app layer: routing, and the honesty states surviving contact with a UI.
+
+The interesting tests here are not "does the page load". They are: does a withheld
+crop stay withheld once there is a template that could just as easily print a
+number, and does the county-scale caveat still ride along with the prediction.
+A UI is where carefully-built refusals quietly turn into confident answers.
+
+Every test runs against a temporary database, so it never touches the developer's
+data/strata.db.
+"""
+
+from __future__ import annotations
+
+import html
+import re
+
+import pytest
+
+from strata import db
+
+fastapi = pytest.importorskip("fastapi", reason="web extras not installed")
+from fastapi.testclient import TestClient  # noqa: E402
+
+from strata.web import app as webapp  # noqa: E402
+
+
+def visible_text(markup: str) -> str:
+    """The text a reader actually sees, tags and entities resolved."""
+    markup = re.sub(r"<(script|style|svg).*?</\1>", " ", markup, flags=re.S)
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", markup))).strip()
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    """A client backed by a throwaway DB holding both demo fields."""
+    test_db = tmp_path / "test.db"
+    conn = db.init_db(test_db)
+    with conn:
+        corn = conn.execute(
+            """INSERT INTO field (name, county_ansi, county_name, crop, acres)
+               VALUES ('North Field', '029', 'Chester', 'corn_grain_yield', 42.0)"""
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO lab_test (field_id, sampled_at, ph, buffer_ph,
+                                     mehlich3_p_ppm, mehlich3_k_ppm, cec, om_pct)
+               VALUES (?, '2026-04-12', 5.72, 6.50, 22.0, 85.0, 10.5, 2.4)""",
+            (corn,),
+        )
+        site = conn.execute(
+            "INSERT INTO site (field_id, label, lat, lon) VALUES (?,'Upper',39.96,-75.63)",
+            (corn,),
+        ).lastrowid
+        conn.executemany(
+            """INSERT INTO reading (site_id, taken_at, channel, raw_value, source)
+               VALUES (?, ?, 'soil_moisture', ?, 'synthetic')""",
+            [(site, f"2026-05-{d:02d}T09:00:00", 20.0 + d * 0.4) for d in (4, 11, 18, 25)],
+        )
+        # No lab test on this one, and oats is below the product gate.
+        conn.execute(
+            """INSERT INTO field (name, county_ansi, county_name, crop, acres)
+               VALUES ('Back Lot', '029', 'Chester', 'oats_yield', 11.0)"""
+        )
+    conn.close()
+
+    monkeypatch.setattr(db, "DB_PATH", test_db)
+    monkeypatch.setattr(webapp.db, "DB_PATH", test_db)
+    real_init = db.init_db
+    monkeypatch.setattr(webapp.db, "init_db", lambda *a, **k: real_init(test_db))
+
+    with TestClient(webapp.app) as c:
+        yield c
+
+
+# --------------------------------------------------------------------------- #
+# Routing
+# --------------------------------------------------------------------------- #
+def test_every_page_renders(client):
+    for url in ["/", "/models", "/field/1", "/field/2", "/field/1/site/1"]:
+        assert client.get(url).status_code == 200, f"{url} did not render"
+
+
+def test_missing_field_is_404_not_a_crash(client):
+    assert client.get("/field/9999").status_code == 404
+
+
+def test_unknown_channel_renders_empty_rather_than_erroring(client):
+    r = client.get("/field/1/site/1?channel=not_a_channel")
+    assert r.status_code == 200
+    assert "Not enough readings" in visible_text(r.text)
+
+
+# --------------------------------------------------------------------------- #
+# The honesty states
+# --------------------------------------------------------------------------- #
+def test_withheld_crop_shows_no_number(client):
+    """Oats is below the gate. The page must explain, not estimate."""
+    page = visible_text(client.get("/field/2").text)
+    assert "No estimate for this crop" in page
+    assert "bu / acre" not in page.split("What to add")[0], (
+        "a yield figure appeared for a crop the product gate withholds"
+    )
+
+
+def test_field_without_lab_test_refuses_to_advise(client):
+    page = visible_text(client.get("/field/2").text)
+    assert "No soil test on file" in page
+    for word in ("Apply lime", "lb P2O5", "lb K2O"):
+        assert word not in page, f"advised {word!r} with no soil test on file"
+
+
+def test_prediction_carries_the_county_scale_caveat(client):
+    """The easiest caveat to lose in a redesign, and the one that matters most:
+    a number under a field's name is implicitly a field-level claim (METHODS 12.2)."""
+    page = visible_text(client.get("/field/1").text)
+    assert "county-scale estimate" in page
+    assert "Your field can differ from the county" in page
+
+
+def test_shipped_crop_shows_a_number_with_its_error(client):
+    page = visible_text(client.get("/field/1").text)
+    assert "bu / acre" in page
+    assert "Typically within" in page, "a point estimate was shown with no error range"
+
+
+def test_synthetic_readings_are_marked(client):
+    page = visible_text(client.get("/field/1/site/1").text)
+    assert "synthetic data" in page
+
+
+def test_uncalibrated_readings_are_marked(client):
+    """Raw sensor values with no probe->lab fit must not look lab-comparable."""
+    page = visible_text(client.get("/field/1").text)
+    assert "uncalibrated" in page
+
+
+def test_model_card_shows_withheld_crops_too(client):
+    """A surface listing only what it ships would hide the most interesting
+    property of the system: that it declines when it cannot answer."""
+    page = visible_text(client.get("/models").text)
+    assert "withheld" in page
+    assert "oats" in page
+
+
+# --------------------------------------------------------------------------- #
+# Display layer
+# --------------------------------------------------------------------------- #
+def test_internal_crop_keys_never_reach_the_page(client):
+    for url in ["/field/1", "/field/2", "/models"]:
+        page = visible_text(client.get(url).text)
+        leaked = [k for k in webapp.CROP_LABELS if k in page]
+        assert not leaked, f"{url} showed raw NASS crop keys: {leaked}"
+
+
+def test_crop_label_prefers_the_longest_key():
+    """'hay_yield' is a substring of 'alfalfa_hay_yield'; replacing the short key
+    first would render alfalfa as 'alfalfa_hay' and never match the long one."""
+    assert webapp.crop_label("alfalfa_hay_yield") == "alfalfa"
+    assert webapp.crop_label("hay_yield") == "hay"
+    assert webapp.crop_label("corn_silage_yield") == "corn silage"
+
+
+def test_provenance_footer_names_the_build(client):
+    """Every page says which models produced it and when, so a stale build is
+    visible rather than silently trusted."""
+    page = visible_text(client.get("/field/1").text)
+    assert "Models built" in page
+    assert "gate" in page.lower()

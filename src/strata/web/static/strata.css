@@ -1,0 +1,248 @@
+/* Strata — a field tool, not a dashboard.
+ *
+ * Design intent: a farmer checks this on a phone, outdoors, in a hurry. So the
+ * answer is large and unambiguous, the caveats are legible rather than fine
+ * print, and every "we don't know" state gets real visual weight instead of
+ * looking like an error or an empty box.
+ *
+ * The honesty states each own a colour, used consistently everywhere:
+ *   amber   withheld / needs a lab test  — an answer, not a failure
+ *   violet  synthetic or demo data       — never a finding
+ *   slate   uncalibrated                 — real data, not yet lab-comparable
+ *   green   good / shown / calibrated
+ *   red     environmental concern (P runoff)
+ */
+
+:root {
+  --bg:        #f6f5f1;
+  --surface:   #ffffff;
+  --ink:       #1c2118;
+  --ink-soft:  #5b6357;
+  --ink-faint: #8a9184;
+  --line:      #dedbd2;
+
+  --green:     #2f6b3f;
+  --green-bg:  #e7f0e6;
+  --amber:     #8a5a12;
+  --amber-bg:  #fbf0dc;
+  --violet:    #5c4a8a;
+  --violet-bg: #eee9f7;
+  --slate:     #4a5b6b;
+  --slate-bg:  #e8eef2;
+  --red:       #9a3324;
+  --red-bg:    #f9e6e2;
+
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(28, 33, 24, .06), 0 4px 14px rgba(28, 33, 24, .05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #14171a;
+    --surface:   #1c2024;
+    --ink:       #e8eae4;
+    --ink-soft:  #a8b0a6;
+    --ink-faint: #79817a;
+    --line:      #2e343a;
+
+    --green:     #86c78e;  --green-bg:  #1d2c20;
+    --amber:     #e0b169;  --amber-bg:  #2e2617;
+    --violet:    #b9a8e6;  --violet-bg: #241f33;
+    --slate:     #9fb5c6;  --slate-bg:  #1b242b;
+    --red:       #e8938a;  --red-bg:    #2f1d1a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ── chrome ──────────────────────────────────────────────────────────── */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+  padding: .85rem clamp(1rem, 4vw, 2rem);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  font-weight: 700; font-size: 1.15rem; letter-spacing: -.01em;
+  color: var(--ink); text-decoration: none;
+}
+.topbar nav { display: flex; gap: 1rem; align-items: center; }
+.topbar nav a { color: var(--ink-soft); text-decoration: none; font-size: .92rem; }
+.topbar nav a:hover { color: var(--ink); }
+.toggle {
+  padding: .2rem .6rem; border: 1px solid var(--line);
+  border-radius: 999px; font-variant-numeric: tabular-nums;
+}
+.toggle.on { background: var(--slate-bg); color: var(--slate); border-color: transparent; }
+
+main { max-width: 760px; margin: 0 auto; padding: clamp(1rem, 4vw, 2rem); }
+
+footer {
+  max-width: 760px; margin: 0 auto;
+  padding: 1.5rem clamp(1rem, 4vw, 2rem) 3rem;
+  color: var(--ink-faint); font-size: .82rem;
+  border-top: 1px solid var(--line);
+}
+footer p { margin: .35rem 0; }
+
+.banner {
+  padding: .7rem clamp(1rem, 4vw, 2rem);
+  font-size: .9rem; display: flex; gap: .5rem; flex-wrap: wrap;
+}
+.banner.error { background: var(--red-bg);   color: var(--red); }
+.banner.warn  { background: var(--amber-bg); color: var(--amber); }
+
+/* ── type ────────────────────────────────────────────────────────────── */
+h1 { font-size: 1.7rem; margin: .2rem 0 .1rem; letter-spacing: -.02em; }
+h2 { font-size: 1.02rem; margin: 0 0 .8rem; letter-spacing: .01em;
+     text-transform: uppercase; color: var(--ink-soft); font-weight: 650; }
+.sub   { color: var(--ink-soft); margin: 0 0 1.4rem; font-size: .95rem; }
+.crumb { margin: 0 0 .6rem; font-size: .9rem; }
+.crumb a { color: var(--ink-soft); text-decoration: none; }
+.muted { color: var(--ink-faint); }
+
+/* ── cards ───────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+  margin-bottom: 1.1rem;
+}
+
+/* The answer. Deliberately big — this is what someone opened the app for. */
+.figure {
+  font-size: clamp(2.6rem, 11vw, 3.6rem);
+  font-weight: 700; line-height: 1; letter-spacing: -.03em;
+  margin: .2rem 0 .3rem; color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+.figure .unit { font-size: .3em; font-weight: 600; color: var(--ink-soft); letter-spacing: 0; }
+
+/* Plain-language explanation. Not fine print — it reads at body size. */
+.give { margin: .5rem 0 0; color: var(--ink-soft); font-size: .93rem; }
+
+/* The granularity caveat, which must never become a footnote. */
+.caveat {
+  margin: .9rem 0 0; padding: .7rem .85rem;
+  background: var(--slate-bg); color: var(--slate);
+  border-radius: 8px; font-size: .88rem;
+}
+.caveat strong { color: var(--slate); }
+
+/* "We don't know" states, sized like an answer because they are one. */
+.state-withheld, .state-needs {
+  font-size: 1.35rem; font-weight: 650; letter-spacing: -.01em;
+  margin: .2rem 0 .1rem; color: var(--amber);
+}
+
+/* ── tags ────────────────────────────────────────────────────────────── */
+.tags { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.tag {
+  display: inline-block; padding: .12rem .5rem; border-radius: 999px;
+  font-size: .74rem; font-weight: 600; letter-spacing: .02em;
+  text-transform: lowercase; white-space: nowrap;
+}
+.tag.ok,        .sev-ok            { background: var(--green-bg);  color: var(--green); }
+.tag.withheld,  .sev-unknown       { background: var(--amber-bg);  color: var(--amber); }
+.tag.synthetic                     { background: var(--violet-bg); color: var(--violet); }
+.tag.uncal                         { background: var(--slate-bg);  color: var(--slate); }
+.sev-deficiency, .sev-maintenance  { background: var(--amber-bg);  color: var(--amber); }
+.sev-environmental                 { background: var(--red-bg);    color: var(--red); }
+
+/* ── recommendations ─────────────────────────────────────────────────── */
+.rec {
+  border-top: 1px solid var(--line);
+  padding: 1rem 0 .2rem;
+}
+.rec:first-of-type { border-top: none; }
+.rec-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .35rem; }
+.rec-cat  { font-weight: 650; }
+.rec-measured { margin: .1rem 0; color: var(--ink-faint); font-size: .86rem;
+                font-variant-numeric: tabular-nums; }
+.rec-finding  { margin: .25rem 0; }
+.rec-action   { margin: .25rem 0; color: var(--ink-soft); font-size: .93rem; }
+.rec-amount {
+  margin: .5rem 0 .2rem; padding: .5rem .7rem;
+  background: var(--green-bg); color: var(--green);
+  border-radius: 8px; font-weight: 600; font-size: .93rem;
+}
+.rec-unknown .rec-amount { background: var(--amber-bg); color: var(--amber); }
+
+/* The citation is the trust anchor: reachable in one click, never buried. */
+.cite { margin-top: .5rem; font-size: .85rem; }
+.cite summary { cursor: pointer; color: var(--ink-soft); }
+.cite p { margin: .4rem 0 0; color: var(--ink-faint); }
+
+/* ── tables ──────────────────────────────────────────────────────────── */
+.grid { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.grid th {
+  text-align: left; font-weight: 600; color: var(--ink-faint);
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .04em;
+  padding: .4rem .5rem .4rem 0; border-bottom: 1px solid var(--line);
+}
+.grid td { padding: .5rem .5rem .5rem 0; border-bottom: 1px solid var(--line);
+           font-variant-numeric: tabular-nums; }
+.grid tr:last-child td { border-bottom: none; }
+.row-withheld td { color: var(--ink-faint); }
+
+/* ── sites ───────────────────────────────────────────────────────────── */
+.sites { display: grid; gap: .6rem; margin-top: 1rem;
+         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.site {
+  display: flex; flex-direction: column; gap: .15rem;
+  padding: .8rem .9rem; text-decoration: none;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 8px; color: var(--ink);
+}
+.site:hover { border-color: var(--green); }
+.site-label { font-weight: 650; }
+.site-note  { font-size: .85rem; color: var(--ink-soft); }
+.site-geo   { font-size: .78rem; color: var(--ink-faint);
+              font-variant-numeric: tabular-nums; }
+
+/* ── channel chips ───────────────────────────────────────────────────── */
+.chips { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.chip {
+  padding: .3rem .7rem; border-radius: 999px; font-size: .85rem;
+  text-decoration: none; color: var(--ink-soft);
+  background: var(--surface); border: 1px solid var(--line);
+}
+/* --surface, not #fff: in dark mode --green is a light mint, so white text on it
+   is nearly unreadable. Using the surface colour flips correctly in both themes. */
+.chip.on { background: var(--green); color: var(--surface); border-color: transparent; }
+
+/* ── sparkline ───────────────────────────────────────────────────────── */
+.spark { width: 100%; height: auto; color: var(--green); display: block; }
+.spark circle { fill: var(--green); }
+.axis {
+  display: flex; justify-content: space-between;
+  font-size: .78rem; color: var(--ink-faint); margin: .2rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── prototyping / details view ──────────────────────────────────────── */
+.dev {
+  margin-top: .8rem; padding: .55rem .7rem;
+  background: var(--slate-bg); color: var(--slate);
+  border-radius: 6px; font-size: .8rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-x: auto;
+}
+.dev-inline { color: var(--ink-faint); font-size: .78rem; margin-left: .4rem;
+              font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .88em; background: var(--bg); padding: .1em .35em; border-radius: 4px;
+}
