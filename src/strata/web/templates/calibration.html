@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Calibration — Strata{% endblock %}
+
+{% block content %}
+<h1>Calibration</h1>
+<p class="sub">Tie a cheap sensor's readings to a laboratory scale.</p>
+
+{% if error %}<div class="formerror">{{ error }}</div>{% endif %}
+{% if fitted %}<div class="formok">{{ fitted }}</div>{% endif %}
+
+<section class="card">
+  <p class="give">
+    A probe is only useful if its numbers can be trusted like a lab's. Measure the
+    same samples both ways, enter the pairs, and Strata fits the straight line that
+    maps one onto the other &mdash; then applies it to readings that don't have a
+    calibrated value yet.
+  </p>
+  <p class="give">
+    <strong>Readings already calibrated are left alone.</strong> Re-deriving them
+    under a new fit would quietly change numbers you may have already acted on.
+  </p>
+
+  <form method="post" class="form"
+        action="/calibration{% if details %}?details=true{% endif %}">
+    <div class="row">
+      <label>
+        <span>Measurement</span>
+        <select name="channel" required>
+          {% for name, c in calibratable.items() %}
+            <option value="{{ name }}">{{ name|replace('_',' ') }} &rarr; {{ c.lab_scale }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Notes</span>
+        <input type="text" name="notes" maxlength="500"
+               placeholder="Which samples, which lab, when">
+      </label>
+    </div>
+
+    <label class="full">
+      <span>Paired readings &mdash; one per line, <code>probe,lab</code></span>
+      <textarea name="pairs" rows="8" required
+                placeholder="5.40,5.61&#10;6.02,6.18&#10;6.55,6.71&#10;7.10,7.22"></textarea>
+    </label>
+
+    <p class="give hint">
+      At least three pairs. Two points always fit a line perfectly, which would
+      report a flawless R&sup2; that means nothing.
+    </p>
+
+    <div class="actions">
+      <button type="submit">Fit calibration</button>
+    </div>
+  </form>
+</section>
+
+{% if uncalibrated %}
+  <section class="card">
+    <h2>Waiting on a calibration</h2>
+    <table class="grid">
+      <thead><tr><th>Measurement</th><th>Uncalibrated readings</th><th></th></tr></thead>
+      <tbody>
+        {% for u in uncalibrated %}
+          <tr>
+            <td>{{ u.channel|replace('_',' ') }}</td>
+            <td>{{ u.n }}</td>
+            <td>
+              {% if u.channel in calibratable %}
+                <span class="tag uncal">can be calibrated</span>
+              {% else %}
+                <span class="muted">no laboratory equivalent</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endif %}
+
+{% if fits %}
+  <section class="card">
+    <h2>Fitted calibrations</h2>
+    <table class="grid">
+      <thead>
+        <tr><th>Measurement</th><th>Mapping</th><th>R&sup2;</th><th>RMSE</th>
+            <th>Pairs</th><th>Fitted</th></tr>
+      </thead>
+      <tbody>
+        {% for f in fits %}
+          <tr>
+            <td>{{ f.channel|replace('_',' ') }}
+              {% if f.synthetic %}<span class="tag synthetic">synthetic</span>{% endif %}
+            </td>
+            <td><code>lab = {{ "%.3f"|format(f.slope) }}&times;probe
+              {{ "%+.3f"|format(f.intercept) }}</code></td>
+            <td>{{ "%.3f"|format(f.r2) if f.r2 is not none else '—' }}</td>
+            <td>{{ "%.3f"|format(f.rmse) if f.rmse is not none else '—' }}</td>
+            <td>{{ f.n_pairs }}</td>
+            <td>{{ f.fitted_at[:10] }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="give">
+      A low R&sup2; is information, not a failure &mdash; it means this sensor does
+      not track the lab well enough to trust for that measurement, which is worth
+      knowing before you fertilize on it.
+    </p>
+  </section>
+{% endif %}
+
+<section class="card">
+  <h2>What cannot be calibrated, and why</h2>
+  <p class="give">
+    These measurements have no laboratory equivalent to map onto, so Strata does not
+    offer a calibration for them. That is a real limit, not a missing feature:
+    inventing a mapping to a scale that does not exist would produce
+    official-looking numbers with nothing behind them.
+  </p>
+  <table class="grid">
+    <thead><tr><th>Measurement</th><th>Why</th></tr></thead>
+    <tbody>
+      {% for name, c in not_calibratable.items() %}
+        <tr>
+          <td>{{ name|replace('_',' ') }}</td>
+          <td>{{ c.note }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

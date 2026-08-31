@@ -1151,6 +1151,54 @@ predicts at the latest observed county-year conditions (currently 2023, where
 Daymet coverage ends) and says so on screen. This is a "what this county yields
 under recent conditions" figure, not a forecast of an unobserved season.
 
+### 10.2 Data entry, and the failure mode it introduces
+
+**Added 2026-08-31.** The app gained three write paths: soil-test entry, CSV
+reading import, and calibration fitting. Each one is a place where a
+well-intentioned convenience would quietly void a guarantee established earlier in
+this document, so the rules are stated here and enforced in
+`tests/test_web_forms.py`.
+
+**A blank input stays `None`.** §8's input honesty depends on the distinction
+between *not measured* and *measured as zero*. A form that coerced an empty
+Mehlich-3 P box to `0.0` would hand the engine a severely deficient soil rather
+than a missing value, and the engine would respond exactly as designed — with a
+large, confident, entirely fabricated phosphate rate. `forms.optional_float`
+returns `None` for empty input and a real `0.0` only for an entered zero. This is
+the single most consequential line in the app layer.
+
+**Range checks reject the impossible, not the unusual.** A pH of 87 is a typo or a
+unit error and would propagate a wrong lime rate to a real field. The bounds are
+deliberately wide, because a genuinely strange soil is the one most in need of
+advice; only physically impossible values are refused.
+
+**Unknown import columns are surfaced, not absorbed.** `probe.CHANNELS` (§9.1) is
+the registry of what this hardware measures. A CSV column outside it is either a
+firmware change or a typo. The importer counts and names it back to the user
+rather than storing it under an invented channel, and reports every skipped row —
+an import that says "312 readings added" while silently discarding 40 it did not
+understand is how bad data enters a system that claims it excludes it.
+
+**Import is idempotent.** The `(site, taken_at, channel)` unique index plus
+`INSERT OR IGNORE` means re-importing a file adds nothing, so a duplicated season
+of readings cannot be created by an anxious second click.
+
+**Calibration respects §9.1's routing.** Only channels with a `lab_scale` are
+offered; CO₂, nitrogen, moisture and temperature have no laboratory equivalent to
+map onto, and the page explains why rather than presenting a box that would
+manufacture one. A new fit applies only to readings with no calibrated value:
+re-deriving values a farmer may already have acted on, with no record that they
+changed, is worse than leaving an older fit in place.
+
+**Known limitation.** The `calibration` table is not scoped to a device, so a fit
+applies to every reading of that channel. With one prototype probe this is
+correct — a calibration belongs to the sensor, not the field. A second device with
+different characteristics would need `calibration.device_id` and a matching join
+in the apply step.
+
+---
+
+
 ---
 
 ## 11. Impact, contribution, and relation to prior work
@@ -1331,6 +1379,7 @@ population with no `county_ansi`, dropped one step earlier — never conflate th
 | Any invariant a test encodes | §13.1, and add/adjust the test in the same commit |
 | `artifacts.py` or the build step | §10.1 |
 | `web/` templates or the honesty states | §10.1 and `tests/test_web_app.py` |
+| `web/forms.py` validation rules | §10.2 and `tests/test_web_forms.py` |
 | Fixing defect §12.1 | §4 funnel, §6 **all results**, §12.1 → move to changelog |
 
 ### 13.1 Executable invariants
@@ -1346,6 +1395,8 @@ tests, ~2s), so a regression fails loudly instead of quietly changing the number
 | `tests/test_recommender_honesty.py` | §8 refusals: no P/K interpretation without a lab test, no lime rate without buffer pH, a predicted yield never unlocks a missing measurement, every recommendation carries a citation. |
 | `tests/test_calibration.py` | §9 mapping recovery, minimum-sample refusal, and propagation of the `synthetic` flag. |
 | `tests/test_probe_placeholder.py` | §9.1 channel routing, and that the unimplemented conversions still refuse. |
+| `tests/test_web_app.py` | §10.1 — the five honesty states survive rendering. |
+| `tests/test_web_forms.py` | §10.2 — blank-is-not-zero end to end, range checks, unknown-channel reporting, idempotent import, calibration routing. |
 
 **Validated against the real defect.** Replaying the pre-fix sliced-areasymbol
 logic from §12.1 against this suite trips three tests simultaneously: fabricated
@@ -1408,6 +1459,7 @@ python -m strata.report
 |---|---|
 | 2026-07-20 | Document created. Verified join funnel and variance decomposition against live data. **Discovered and documented defect §12.1** (multi-county SSURGO survey areas dropping 10 counties) and corrected the README's misattribution of those dropped FIPS to NASS pseudo-records. Added literature positioning (§11). |
 | 2026-07-24 | **Broke the feature-information ceiling with time-varying features.** Added four free within-county time-varying sources and A/B-tested each on the honest leave-counties-out *and* forward-in-time splits: sub-season **weather windows** and cropland-masked **MODIS NDVI** shipped (corn forward forecast 0.28 → 0.39 → 0.46); a **water-balance drought index** and **ERA5-Land soil moisture** were tested-null (redundant reanalyses, carried for audit only). See §7. |
+| 2026-08-31 | **Added data entry (§10.2).** Soil-test form, CSV reading import (long or wide, shape detected from the header, idempotent), and a calibration UI. Split `web/` into `core`/`views`/`edit`/`forms`. Three rules from §8 and §9.1 now hold at the input boundary and are tested: a blank measurement stays missing rather than becoming zero, unknown import columns are reported rather than absorbed, and a channel with no lab scale cannot be calibrated. Fixed the site page defaulting to a hardcoded channel, which rendered an empty plot captioned with a measurement the site had no data for. |
 | 2026-08-31 | **Added the serving layer and the web app (§10.1).** `artifacts.py` + `scripts/build_models.py` fit and evaluate each crop once into `data/models/`, replacing three independent recomputations of the same cross-validation; `ProductForecast` now carries MAE and dataset shape so one CV serves every caller. Added `db.py` (SQLite: fields, sites, readings, lab tests) and a FastAPI/Jinja app whose five honesty states are test-enforced. Collapsed `assemble.py`'s three copy-pasted county-year joins into one loop, verified byte-identical against the previous table. |
 | 2026-08-31 | **Added an executable test suite (§13.1)** covering the join, feature, leakage, and refusal invariants this document asserts, validated by replaying defect §12.1 against it. Fixed a stale hardcoded result in `main.py`'s closing summary (it quoted R² 0.55/0.28 while the run printed 0.61/0.46); the summary now reports the metrics the run actually produced. Added `probe.py` (§9.1), a **placeholder** channel registry and reading contract for the acquired sensor suite — conversions raise `NotImplementedError` rather than parse a guessed device format, and nothing in the pipeline imports it. |
 | 2026-07-25 | **Fixed defect §12.1** (multi-county SSURGO → 66 counties) and **regenerated every model number** on the current shipped matrix (soil + weather windows + NDVI). Headline corn: random 0.69 / LCO 0.60 / forward 0.46. Two narrative consequences recorded honestly: the no-trend forward forecast rose from −0.42 to +0.09 (NDVI recovers the level), and **winter wheat crossed the 0.30 product gate** (0.318, now shipped). Swept all legacy figures in §3–§12 to match. |

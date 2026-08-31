@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Import readings — {{ field.name }}{% endblock %}
+
+{% block content %}
+<p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
+<h1>Import readings</h1>
+<p class="sub">{{ field.name }} &middot; {{ field.county_name }} County</p>
+
+{% if error %}
+  <div class="formerror">{{ error }}</div>
+{% endif %}
+
+{% if added is not none %}
+  <div class="formok">
+    Added {{ added }} reading{{ '' if added == 1 else 's' }}.
+    {% if skipped %}
+      <strong>{{ skipped }} row{{ '' if skipped == 1 else 's' }} skipped.</strong>
+    {% endif %}
+    {% if unknown %}
+      Unrecognised measurements: <code>{{ unknown }}</code> &mdash; these were not
+      imported. Either the name is a typo, or the device gained a channel that
+      <code>probe.py</code> does not know about yet.
+    {% endif %}
+    {% if added == 0 and not skipped %}
+      Everything in that file was already imported, so nothing changed.
+    {% endif %}
+  </div>
+{% endif %}
+
+<section class="card">
+  <p class="give">
+    Paste or upload a CSV. Either shape works &mdash; Strata reads the header and
+    figures out which one you have. Re-importing the same file is safe: readings
+    already stored are skipped rather than duplicated.
+  </p>
+
+  <div class="dev">one row per measurement<br>
+site,taken_at,channel,raw_value<br>
+Upper bench,2026-06-15 09:30,soil_moisture,22.4</div>
+
+  <div class="dev">one row per visit<br>
+site,taken_at,soil_moisture,soil_temp,co2<br>
+Upper bench,2026-06-15 09:30,22.4,18.1,1450</div>
+
+  <form method="post" enctype="multipart/form-data" class="form"
+        action="/field/{{ field.id }}/import{% if details %}?details=true{% endif %}">
+
+    <label class="full">
+      <span>Paste CSV</span>
+      <textarea name="csv_text" rows="8"
+                placeholder="site,taken_at,channel,raw_value"></textarea>
+    </label>
+
+    <div class="row">
+      <label>
+        <span>…or choose a file</span>
+        <input type="file" name="csv_file" accept=".csv,text/csv">
+      </label>
+      <label>
+        <span>Site, if the file has no site column</span>
+        <input type="text" name="default_site" list="known-sites"
+               placeholder="Upper bench">
+        <datalist id="known-sites">
+          {% for s in sites %}<option value="{{ s.label }}">{% endfor %}
+        </datalist>
+      </label>
+    </div>
+
+    <div class="actions">
+      <button type="submit">Import</button>
+      <a class="cancel" href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">Cancel</a>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Measurements Strata recognises</h2>
+  <p class="give">
+    A column outside this list is reported back to you rather than imported under a
+    made-up name, so a firmware change or a typo is visible instead of silent.
+  </p>
+  <table class="grid">
+    <thead><tr><th>Name</th><th>Units</th><th>Sensor</th><th>Used for</th></tr></thead>
+    <tbody>
+      {% for name, c in channels.items() %}
+        <tr>
+          <td><code>{{ name }}</code></td>
+          <td>{{ c.units }}</td>
+          <td>{{ c.sensor }}</td>
+          <td>
+            {% if c.lab_scale %}
+              advice + trends
+            {% else %}
+              <span class="muted">trends only</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="give">
+    <strong>Trends only</strong> means the measurement has no laboratory equivalent,
+    so there is no cited Penn State rule for it to answer to. It is shown as a
+    change over time and never turned into a fertilizer recommendation.
+  </p>
+</section>
+{% endblock %}

@@ -48,6 +48,10 @@ strata/
 │   ├── artifacts.py         # [IMPLEMENTED] fit models once -> data/models/, serve fast
 │   ├── db.py                # [IMPLEMENTED] SQLite: fields, sites, readings, lab tests
 │   ├── web/                 # [IMPLEMENTED] FastAPI + Jinja app (farmer-facing)
+│   │   ├── core.py          #   shared state, templates, domain helpers
+│   │   ├── views.py         #   read routes
+│   │   ├── edit.py          #   write routes (soil test, import, calibration)
+│   │   └── forms.py         #   input validation + the reasoning behind each rule
 │   ├── main.py              # [IMPLEMENTED] orchestrator + readable report
 │   └── report.py            # [IMPLEMENTED] 4-panel diagnostic dashboard PNG
 ├── tests/                   # [IMPLEMENTED] pytest suite (50 tests): join integrity,
@@ -535,12 +539,34 @@ readings) is the happy path, and **Back Lot** (oats, no lab test) renders WITHHE
 and NEEDS LAB TEST at once. A prototype where every path succeeds hides exactly
 the screens this product is unusual for.
 
+### What you can do in it
+
+| | |
+|---|---|
+| **Add a soil test** | The form that unlocks quantified P/K and lime advice. Works with **zero hardware** — enter a real AASL report and get cited recommendations immediately. |
+| **Import readings** | CSV, pasted or uploaded, in **either** long (`site,taken_at,channel,raw_value`) or wide (`site,taken_at,soil_moisture,soil_temp,…`) form — the shape is detected from the header. Re-importing the same file is idempotent. Sites named in the file are created on demand. |
+| **Calibrate** | Enter paired `probe,lab` readings; Strata fits the line and applies it to readings that have no calibrated value yet. |
+
+Three rules in that layer are load-bearing enough to be tested:
+
+- **A blank input stays `None`, never `0.0`.** An empty phosphorus box means *not
+  measured*, which the engine answers with "obtain a soil test". Coercing it to
+  zero would instead assert a severely deficient soil and produce a confident
+  fertilizer rate from a number nobody measured.
+- **Unknown CSV columns are reported, not guessed at.** `probe.CHANNELS` is the
+  registry of what this hardware measures; a column outside it is either a
+  firmware change or a typo, and both deserve to be visible.
+- **A channel with no lab scale cannot be calibrated.** CO₂, nitrogen, moisture
+  and temperature have no AASL equivalent to map onto, so the UI explains why
+  rather than offering a box that would invent one. Already-calibrated readings
+  are never silently re-derived under a new fit.
+
 ---
 
 ## Tests
 
 ```bash
-python -m pytest        # 63 tests, ~35s
+python -m pytest        # 87 tests, ~55s
 ```
 
 The suite guards the invariants that fail *silently* — the dangerous kind. Nothing
@@ -555,6 +581,7 @@ quietly stop being true.
 | `test_recommender_honesty.py` | The refusals hold: no P/K interpretation without a lab test, no lime rate without buffer pH, a predicted yield never unlocks a missing measurement, every recommendation carries a citation. |
 | `test_calibration.py` | The probe→lab mapping is recovered correctly, refuses too few pairs, and carries the `synthetic` flag through — losing that flag is how labeled fake numbers become real claims. |
 | `test_probe_placeholder.py` | Channel routing (a channel with no lab scale can never reach a cited AASL threshold) and that the unimplemented conversions still refuse. |
+| `test_web_forms.py` | Input validation and the write paths: a blank measurement stays missing rather than becoming zero (end to end, through the form and into the recommendation), impossible values are rejected, unknown CSV channels are reported, re-import is idempotent, and a channel with no lab scale cannot be calibrated. |
 | `test_web_app.py` | The honesty states survive contact with a UI: a withheld crop shows no number, a field with no lab test gets no rate, the county-scale caveat rides with every prediction, synthetic and uncalibrated data stay marked, and raw NASS crop keys never reach the page. |
 
 **Verified against the real defect.** `docs/METHODS.md` §12.1 records the

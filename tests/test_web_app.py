@@ -62,10 +62,13 @@ def client(tmp_path, monkeypatch):
         )
     conn.close()
 
-    monkeypatch.setattr(db, "DB_PATH", test_db)
-    monkeypatch.setattr(webapp.db, "DB_PATH", test_db)
+    # Patch db.init_db itself rather than a route module's reference to it. Every
+    # route calls db.init_db() with no argument, so redirecting the default here
+    # covers views, edit, and anything added later -- and cannot go stale when the
+    # routes are reorganised, which patching per-module references already did once.
     real_init = db.init_db
-    monkeypatch.setattr(webapp.db, "init_db", lambda *a, **k: real_init(test_db))
+    monkeypatch.setattr(db, "DB_PATH", test_db)
+    monkeypatch.setattr(db, "init_db", lambda *a, **k: real_init(test_db))
 
     with TestClient(webapp.app) as c:
         yield c
@@ -83,10 +86,16 @@ def test_missing_field_is_404_not_a_crash(client):
     assert client.get("/field/9999").status_code == 404
 
 
-def test_unknown_channel_renders_empty_rather_than_erroring(client):
+def test_unknown_channel_falls_back_to_a_real_one(client):
+    """An unrecognised ?channel= used to render an empty plot captioned with a
+    measurement the site had no data for. It now falls back to a channel the site
+    actually has, so a stale bookmark or a typo shows real data instead of a page
+    that looks broken."""
     r = client.get("/field/1/site/1?channel=not_a_channel")
     assert r.status_code == 200
-    assert "Not enough readings" in visible_text(r.text)
+    page = visible_text(r.text)
+    assert "Not enough readings" not in page
+    assert "SEN0193" in page, "did not fall back to the site's soil-moisture data"
 
 
 # --------------------------------------------------------------------------- #

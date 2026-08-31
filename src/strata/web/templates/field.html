@@ -74,6 +74,10 @@
       and buffer pH numbers the Penn State rules need. Add an AASL report to get
       quantified advice.
     </p>
+    <div class="cardlinks">
+      <a class="cardlink primary"
+         href="/field/{{ field.id }}/soil-test{% if details %}?details=true{% endif %}">Add a soil test</a>
+    </div>
   {% else %}
     <p class="sub">
       From your {{ lab.sampled_at }} soil test{% if lab.lab_name %} ({{ lab.lab_name }}){% endif %}.
@@ -102,6 +106,10 @@
         </details>
       </article>
     {% endfor %}
+    <div class="cardlinks">
+      <a class="cardlink"
+         href="/field/{{ field.id }}/soil-test{% if details %}?details=true{% endif %}">Add a newer soil test</a>
+    </div>
   {% endif %}
 </section>
 
@@ -111,6 +119,10 @@
 
   {% if not channels %}
     <p class="give">No probe readings yet.</p>
+    <div class="cardlinks">
+      <a class="cardlink primary"
+         href="/field/{{ field.id }}/import{% if details %}?details=true{% endif %}">Import readings</a>
+    </div>
   {% else %}
     <table class="grid">
       <thead>
@@ -155,6 +167,14 @@
           {% if s.lat %}<span class="site-geo">{{ "%.4f"|format(s.lat) }}, {{ "%.4f"|format(s.lon) }}</span>{% endif %}
         </a>
       {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if channels %}
+    <div class="cardlinks">
+      <a class="cardlink"
+         href="/field/{{ field.id }}/import{% if details %}?details=true{% endif %}">Import more readings</a>
+      <a class="cardlink" href="/calibration{% if details %}?details=true{% endif %}">Calibration</a>
     </div>
   {% endif %}
 </section>

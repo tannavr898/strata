@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Soil test — {{ field.name }}{% endblock %}
+
+{% block content %}
+<p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
+<h1>Add a soil test</h1>
+<p class="sub">{{ field.name }} &middot; {{ field.county_name }} County</p>
+
+{% if error %}
+  <div class="formerror">{{ error }}</div>
+{% endif %}
+
+<section class="card">
+  <p class="give">
+    Enter what your laboratory report says. <strong>Leave anything you don't have
+    blank</strong> &mdash; Strata will give advice on what you measured and tell you
+    plainly what it can't answer without the rest. A blank box is never read as
+    zero.
+  </p>
+
+  <form method="post" class="form"
+        action="/field/{{ field.id }}/soil-test{% if details %}?details=true{% endif %}">
+
+    <div class="row">
+      <label>
+        <span>Sample date <em>required</em></span>
+        <input type="date" name="sampled_at" value="{{ today }}" required>
+      </label>
+      <label>
+        <span>Laboratory</span>
+        <input type="text" name="lab_name" placeholder="Penn State AASL"
+               maxlength="120">
+      </label>
+    </div>
+
+    <div class="grid-fields">
+      {% for name, label, lo, hi in measurements %}
+        <label>
+          <span>{{ label }}</span>
+          <input type="number" step="any" name="{{ name }}"
+                 min="{{ lo }}" max="{{ hi }}"
+                 value="{{ previous[name] if previous and previous[name] is not none else '' }}">
+        </label>
+      {% endfor %}
+    </div>
+
+    <p class="give hint">
+      <strong>Buffer pH</strong> is what sets a lime <em>rate</em>. Without it Strata
+      will still tell you whether you need lime, but not how much &mdash; no field
+      probe and no county soil survey can supply it.
+    </p>
+
+    <label class="full">
+      <span>Notes</span>
+      <textarea name="notes" rows="2" maxlength="500"
+                placeholder="Anything worth remembering about this sample"></textarea>
+    </label>
+
+    <div class="actions">
+      <button type="submit">Save soil test</button>
+      <a class="cancel" href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">Cancel</a>
+    </div>
+  </form>
+</section>
+
+{% if previous %}
+  <section class="card">
+    <h2>Most recent test on file</h2>
+    <p class="sub">Sampled {{ previous.sampled_at }}{% if previous.lab_name %} &middot; {{ previous.lab_name }}{% endif %}</p>
+    <p class="give">
+      The values above are pre-filled from it so you only change what moved. Saving
+      creates a <strong>new</strong> test rather than editing this one &mdash; soil
+      chemistry changes after every liming and fertilizing, so the history matters.
+    </p>
+  </section>
+{% endif %}
+{% endblock %}
