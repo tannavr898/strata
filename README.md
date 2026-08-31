@@ -4,6 +4,13 @@ An affordable precision-ag data/ML product for small farms in Chester County, PA
 (Exton/Malvern area). Strata does three things for a crop the farmer **already
 grows**:
 
+> **Two companion documents, both kept in sync with the code:**
+> - **[`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md)** — start here. Traces one
+>   real row of data through the whole pipeline in plain language, explains every
+>   module mechanically, and includes a glossary. No ag or ML background assumed.
+> - **[`docs/METHODS.md`](docs/METHODS.md)** — the formal writeup for a paper:
+>   abstract, methods, results, figures, related work, and limitations.
+
 1. **Yield regression** — predict county-year yield from soil + weather features.
 2. **Soil classification** — characterize soil taxonomic class from measurable lab
    properties (rigor: proves soil is characterizable from numbers).
@@ -29,7 +36,8 @@ strata/
 │   ├── raw/                 # pulled source data (gitignored; reproduce via provenance)
 │   └── processed/           # analysis tables, county-year unit (gitignored)
 ├── src/strata/
-│   ├── data_ingest.py       # [IMPLEMENTED] NASS + SSURGO + KSSL + Daymet loaders
+│   ├── data_ingest.py       # [IMPLEMENTED] NASS + SSURGO + KSSL + Daymet (+ per-window
+│   │                        #   weather & water balance) + Open-Meteo soil moisture + MODIS NDVI
 │   ├── assemble.py          # [IMPLEMENTED] join -> county-year-crop analysis table
 │   ├── soil_classifier.py   # [IMPLEMENTED] SoilClassifier (RandomForestClassifier)
 │   ├── yield_model.py       # [IMPLEMENTED] YieldModel (RandomForestRegressor)
@@ -37,7 +45,10 @@ strata/
 │   ├── calibration.py       # [IMPLEMENTED] cheap-probe vs lab calibration seam
 │   ├── main.py              # [IMPLEMENTED] orchestrator + readable report
 │   └── report.py            # [IMPLEMENTED] 4-panel diagnostic dashboard PNG
-├── requirements.txt
+├── scripts/
+│   └── ee_authenticate.py   # [IMPLEMENTED] one-time Earth Engine auth (truststore-wrapped
+│                            #   so the OAuth token exchange survives Norton TLS interception)
+├── requirements.txt         # + earthengine-api (NDVI source; only that loader imports it)
 ├── .env.example             # copy to .env, add NASS_API_KEY
 └── README.md
 ```
@@ -74,9 +85,11 @@ Access dates will be filled in as each source is actually pulled.
 | 1 | USDA NASS Quick Stats | County-level PA yields, 8 crops (corn grain/silage, soybean, winter wheat, barley, oats, hay, alfalfa hay), SURVEY, year≥2000 | `https://quickstats.nass.usda.gov/api/api_GET/` | 2026-06-24 |
 | 2 | USDA SSURGO via Soil Data Access (SDA) | County-level topsoil (0-25cm) texture, pH, OM, CEC + dominant Soil Taxonomy order & drainage, for all 62 PA survey areas | `https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest` | 2026-06-24 |
 | 3 | NCSS/KSSL Soil Characterization DB | Lab pedon horizons (sand/silt/clay, pH, CEC, organic C) + Soil Taxonomy order/great group, 14 NE/Mid-Atlantic states | SDA Lab Data Mart (`lab_*` tables) | 2026-06-24 |
-| 4 | Daymet v4 daily weather | County-centroid daily Tmax/Tmin/precip -> growing-season (Apr-Oct) features, 2000-2023 | `https://daymet.ornl.gov/single-pixel/api/data` | 2026-06-24 |
+| 4 | Daymet v4 daily weather | County-centroid daily Tmax/Tmin/precip -> growing-season (Apr-Oct) features **+ per-window (Apr-May/Jun/Jul/Aug-Oct) precip & heat-days + a Hargreaves climatic water balance** | `https://daymet.ornl.gov/single-pixel/api/data` | 2026-07-24 |
 | 5 | Penn State AASL handbooks | Mehlich-3 P/K, buffer lime, PSNT corn-N rules | Encoded as a cited rule engine (not learned) | n/a |
 | 6 | Synthetic Kaggle yield CSV | Smoke-test scaffold ONLY | (scaffold) | n/a |
+| 7 | Open-Meteo Archive (ERA5-Land) | County-centroid hourly root-zone (7-28cm) soil moisture -> county-year season + per-window means, 2000-2023 | `https://archive-api.open-meteo.com/v1/archive` | 2026-07-24 |
+| 8 | MODIS/061 MOD13Q1 NDVI (via Google Earth Engine) | Cropland-masked (USDA CDL) county NDVI, **time-gated to <= July** (Apr-May/Jun/Jul), 2000-2023 | Earth Engine `ee.ImageCollection('MODIS/061/MOD13Q1')` | 2026-07-24 |
 
 > Source 6 is synthetic. Any result derived from it is labeled as such and is
 > never reported as a finding.
@@ -114,8 +127,17 @@ what we get is complete). Counts and **caveats that matter for the yield model**
 
 #### SSURGO coverage notes (observed 2026-06-24)
 
-- **62 PA county survey areas**, all summarized to one county row each, **no
-  missing soil properties**. Output: `data/processed/ssurgo_pa_soil.csv`.
+- **62 PA survey areas → all 67 PA counties**, **no missing soil properties**.
+  Output: `data/processed/ssurgo_pa_soil.csv` (67 rows).
+- **Survey areas are NOT one-to-one with counties.** Five PA areas are joint
+  two-county surveys (PA605 Juniata+Mifflin, PA607 Cameron+Elk, PA609
+  Warren+Forest, PA610 Bradford+Sullivan, PA611 Greene+Washington) whose
+  areasymbol digits are survey-area codes, *not* county FIPS. The county mapping
+  comes from SSURGO's own `laoverlap` table (`SsurgoSoilLoader.area_county_map`);
+  each joint area emits one row per constituent county, sharing that survey's
+  summary. Deriving the FIPS by slicing the areasymbol instead — as this code did
+  until 2026-07-20 — fabricates codes like `605` that match nothing and silently
+  drops all 10 of those counties. See `docs/METHODS.md` §3.2 and §14.
 - Each county row is an **area×component×depth-weighted** summary of 0-25cm
   topsoil (sand/silt/clay/pH/OM/CEC) plus the dominant Soil Taxonomy order and
   drainage class. Aggregation is done transparently in pandas, not a black-box
@@ -124,10 +146,12 @@ what we get is complete). Counts and **caveats that matter for the yield model**
   square-degrees (geometry is lat/lon). Absolute area is irrelevant; only the
   *relative* within-county weighting matters, and lat/lon distortion across one
   county is negligible.
-- **Join caveat:** NASS reports yields for ~68 county codes (includes "other
-  (combined) counties" pseudo-records); SSURGO has 62 real counties. The
-  county-year join will be an inner join on real FIPS — unmatched NASS pseudo-
-  records are dropped, and we will report how many.
+- **Join caveat:** NASS reports yields under ~68 county codes, of which 66 are real
+  counties and the rest are "other (combined) counties" pseudo-records carrying no
+  county FIPS at all (721 rows). The county-year join is an inner join on real
+  FIPS; the pseudo-records are dropped and the count is reported. With the
+  survey-area mapping above corrected, **every real county now matches** — the soil
+  join drops zero rows.
 - *Granularity mismatch (council rule):* a single county soil summary is coarse
   context for a county-year yield, NOT a field-level claim. Field resolution is
   deferred to the future cheap-probe calibration layer.
@@ -149,6 +173,42 @@ what we get is complete). Counts and **caveats that matter for the yield model**
   (predicting soil order from coordinates would be leakage; the goal is to
   predict it from measurable soil properties).
 
+#### Time-varying features: breaking the ceiling (observed 2026-07-24)
+
+The ceiling analysis below predicted that the only way past LCO R² ≈ 0.55 / forward
+R² ≈ 0.28 was a feature that **varies within a county over time**. We added four such
+free public sources, each validated by the same discipline — an A/B on leave-counties-out
+**and** forward-in-time splits, keeping only what improved the honest forward forecast, and
+pruning the rest. **Two helped; two were redundant nulls.** Headline crop (corn grain):
+
+| model | LCO forecast R² | forward-in-time R² | forward MAE |
+|---|--:|--:|--:|
+| soil + season-aggregate weather (old baseline) | 0.53 | 0.28 | 17.2 bu |
+| + sub-season **weather windows** (precip & heat-days, Apr-May/Jun/Jul/Aug-Oct) | 0.57 | 0.39 | 16.0 bu |
+| + **MODIS NDVI** (cropland-masked, Jun+Jul, time-gated) | **0.61** | **0.46** | **14.6 bu** |
+
+- **Weather windows help** (+0.11 forward): a season total averages away a July (silking)
+  drought or heat burst that decides the year. Pruned to per-window **precip + heat-days** —
+  per-window mean-temp/GDD were collinear and only added forward-forecast noise.
+- **NDVI helps** (+0.07 more forward): a direct satellite *observation* of the crop carries
+  management/vigor/pest signal the meteorology cannot. **Time-gated to ≤ July** so late-season
+  greenness (almost the harvested yield itself) cannot leak into the forecast; pruned to Jun+Jul
+  (the Apr-May window is pre-emergence bare-soil noise). Every gain holds under leave-counties-out
+  and forward-in-time, so it is genuine signal, not memorization.
+- **What does NOT help — a meaningful null.** A gridded **water-balance drought index**
+  (precip − Hargreaves PET, derived from the Daymet daily data) and **ERA5-Land root-zone soil
+  moisture** (Open-Meteo) both add ~0 on the forecast and soil moisture *hurts* winter wheat.
+  Reason: both are reanalyses *derived from the same precipitation/temperature* the weather windows
+  already carry — they are not independent information. This is recorded, not hidden (see the
+  rejected-features note). **It also sharpens the probe argument:** free *gridded* proxies plateau
+  because they are all meteorology-derived, whereas a real field probe measures actual soil water
+  (drainage, texture, management) that a county-mean reanalysis fundamentally cannot — exactly the
+  independent, time-varying soil signal the calibration seam is built to ingest.
+
+Net: forward-in-time forecast **R² 0.28 → 0.46, MAE 17.2 → 14.6 bu/ac** — the ceiling moved,
+using only free public data, and the residual gap is now an argument *for* the probe, not against
+the model. The tables below are the pre-2026-07-24 baseline, retained for the change history.
+
 #### Yield model results (`yield_model.py`, observed 2026-07-07)
 
 Per-crop RandomForest regressors predict county-year yield from soil + weather.
@@ -158,26 +218,33 @@ static soil fingerprint leaks across folds) vs **leave-counties-out (LCO)**, plu
 trend term: withheld = *attribution* (soil+weather only), included = *forecast*
 (product default). County identity is never a feature.
 
-Corn grain (1,138 county-years, 56 counties):
-- mean-yield baseline MAE **21.7 bu/ac** → model LCO forecast MAE **~15 bu/ac**.
-- LCO R²: **0.21 attribution → 0.51 forecast**; forward-forecast R² **0.35**.
-- The random→LCO drop (0.68→0.51) is exactly the county-memorization the design
+> **Regenerated 2026-07-20** after the multi-county SSURGO fix (+10 counties).
+> `docs/METHODS.md` is canonical for full detail and the change analysis.
+
+Corn grain (1,314 county-years, 66 counties):
+- mean-yield baseline MAE **22.8 bu/ac** → model LCO forecast MAE **14.5 bu/ac**.
+- LCO R²: **0.29 attribution → 0.55 forecast**; forward-forecast R² **0.28**.
+- The random→LCO drop (0.66→0.55) is exactly the county-memorization the design
   warns about — LCO is the number to trust.
 
 | crop | attribR² | fcstR² | fwdR² | fcst MAE | ship? |
 |---|--:|--:|--:|--:|:--:|
-| corn_grain | 0.21 | 0.51 | 0.35 | 14.9 bu/ac | ✓ |
-| soybean | 0.26 | 0.51 | 0.32 | 4.2 bu/ac | ✓ |
-| hay | 0.41 | 0.52 | — | 0.24 t/ac | ✓ |
-| corn_silage | 0.23 | 0.44 | 0.46 | 2.1 t/ac | ✓ |
-| barley | 0.31 | 0.38 | — | 6.9 bu/ac | ✓ |
-| winter_wheat | 0.12 | 0.33 | — | 6.6 bu/ac | ✓ |
-| alfalfa_hay | 0.16 | 0.18 | -0.00 | 0.40 t/ac | ✗ |
-| oats | -0.02 | 0.07 | -0.04 | 6.6 bu/ac | ✗ |
+| corn_grain | 0.29 | 0.55 | 0.28 | 14.50 bu/ac | ✓ |
+| soybean | 0.26 | 0.50 | 0.32 | 4.31 bu/ac | ✓ |
+| corn_silage | 0.29 | 0.49 | 0.44 | 1.92 t/ac | ✓ |
+| hay | 0.27 | 0.38 | — | 0.27 t/ac | ✓ |
+| barley | 0.20 | 0.28 | — | 7.31 bu/ac | ✗ |
+| winter_wheat | 0.05 | 0.28 | — | 6.78 bu/ac | ✗ |
+| alfalfa_hay | 0.23 | 0.25 | 0.03 | 0.38 t/ac | ✗ |
+| oats | 0.01 | 0.10 | -0.02 | 6.59 bu/ac | ✗ |
 
-- **Stated honestly:** `oats` and `alfalfa` are essentially unexplained by soil+
-  weather (R² ≈ 0) — surfaced, not masked. Corn/soy/silage/hay/barley forecast
-  usefully. The attribR²→fcstR² jump is the genetic/management yield trend.
+- **Stated honestly:** `oats` is essentially unexplained by soil+weather (R² ≈ 0.1)
+  — surfaced, not masked. Corn/soy/silage/hay forecast usefully. The
+  attribR²→fcstR² jump is the genetic/management yield trend.
+- **The fix made the product ship LESS.** On the old 56-county data, winter wheat
+  (0.33) and barley (0.38) cleared the gate; on corrected data they fall to 0.28
+  and are now withheld. The gate re-evaluated automatically — nobody had to
+  remember to re-check them.
 - **Product quality gate (`ship?`).** Research reports every crop; the *product*
   offers a forecast only where the honest LCO forecast R² clears a named threshold
   (`YieldModel.PRODUCT_MIN_FORECAST_R2 = 0.30`). `oats` (0.07) and `alfalfa` (0.18)
@@ -210,13 +277,15 @@ orders; aridisols/vertisols/oxisols dropped as too rare to validate — 25 pedon
 
 #### Daymet weather coverage (observed 2026-06-24)
 
-- **1,488 county-year rows** (62 counties × 24 years, 2000-2023), **no missing
+- **1,608 county-year rows** (67 counties × 24 years, 2000-2023), **no missing
   features**. Outputs: `data/processed/daymet_pa_weather.csv` and the county
   centroids used (`data/processed/pa_county_centroids.csv`).
 - Features per county-year over the Apr 1-Oct 31 window: `gdd_base10`,
   `precip_total_mm`, `tmax_mean_c`, `tmin_mean_c`, `heat_days_30c`.
 - County represented by ONE area-weighted SSURGO centroid (no new dataset).
   *Granularity caveat:* one point per county; coarse for large/varied counties.
+  *Joint-survey caveat:* the 10 counties in the 5 two-county survey areas share
+  that area's single centroid, so each such pair gets identical weather.
 - **Join caveat:** Daymet ends 2023; NASS yields run to 2025. The 2024-2025
   yield rows will have no weather and drop from the modeling join (reported there).
 
@@ -247,29 +316,29 @@ county can sit in train and test) and **leave-counties-out CV** (GroupKFold on
 FIPS; the honest new-county estimate). Plus a **forward forecast** (train ≤2017,
 predict 2018+), the real-world arrow-of-time test.
 
-Corn grain (1,138 county-years, 56 counties, BU/ACRE):
+Corn grain (1,314 county-years, 66 counties, BU/ACRE):
 
 | evaluation | MAE | R² |
 |------------|----:|---:|
-| mean-yield baseline (held-out) | 21.7 | ~0.00 |
-| attribution, leave-counties-out (soil+weather only) | 19.9 | 0.212 |
-| **forecast, leave-counties-out (+trend)** | **14.9** | **0.513** |
-| forecast, forward-in-time (train ≤2017) | 16.9 | 0.347 |
-| same forward test **without** trend | 25.9 | **−0.42** |
+| mean-yield baseline (held-out) | 22.8 | ~0.00 |
+| attribution, leave-counties-out (soil+weather only) | 19.0 | 0.291 |
+| **forecast, leave-counties-out (+trend)** | **14.5** | **0.546** |
+| forecast, forward-in-time (train ≤2017, 306 county-years) | 17.2 | 0.282 |
+| same forward test **without** trend | 25.6 | **−0.44** |
 
 Per-crop leave-counties-out R² in both modes, plus the forward forecast (crops with
 ≥150 county-years; `nan` = the NASS series ends before 2018 so no forward split):
 
 | crop | rows | counties | unit | attrib R² | forecast R² | forward R² | fcst MAE |
 |------|-----:|---------:|------|----------:|------------:|-----------:|---------:|
-| corn_grain_yield   | 1138 | 56 | BU/ACRE   | 0.212 | 0.513 |  0.347 | 14.9 |
-| oats_yield         |  977 | 52 | BU/ACRE   | -0.019 | 0.072 | -0.039 |  6.6 |
-| soybean_yield      |  949 | 51 | BU/ACRE   | 0.262 | 0.510 |  0.322 |  4.2 |
-| corn_silage_yield  |  883 | 56 | TONS/ACRE | 0.227 | 0.439 |  0.458 |  2.1 |
-| alfalfa_hay_yield  |  727 | 56 | TONS/ACRE | 0.157 | 0.180 | -0.002 |  0.4 |
-| winter_wheat_yield |  630 | 50 | BU/ACRE   | 0.122 | 0.332 |    nan |  6.6 |
-| hay_yield          |  483 | 56 | TONS/ACRE | 0.409 | 0.523 |    nan |  0.2 |
-| barley_yield       |  345 | 33 | BU/ACRE   | 0.305 | 0.376 |    nan |  6.9 |
+| corn_grain_yield   | 1314 | 66 | BU/ACRE   | 0.291 | 0.546 |  0.282 | 14.50 |
+| oats_yield         | 1089 | 61 | BU/ACRE   | 0.005 | 0.099 | -0.015 |  6.59 |
+| corn_silage_yield  | 1044 | 66 | TONS/ACRE | 0.289 | 0.488 |  0.435 |  1.92 |
+| soybean_yield      | 1033 | 57 | BU/ACRE   | 0.264 | 0.504 |  0.317 |  4.31 |
+| alfalfa_hay_yield  |  843 | 66 | TONS/ACRE | 0.230 | 0.252 |  0.032 |  0.38 |
+| winter_wheat_yield |  667 | 54 | BU/ACRE   | 0.048 | 0.281 |    nan |  6.78 |
+| hay_yield          |  567 | 66 | TONS/ACRE | 0.268 | 0.384 |    nan |  0.27 |
+| barley_yield       |  366 | 35 | BU/ACRE   | 0.200 | 0.283 |    nan |  7.31 |
 
 - The trend term lifts **every crop** (corn 0.21→0.51, soy 0.26→0.51, silage
   0.23→0.44, wheat 0.12→0.33). It is surfaced as an explicit, switchable feature,
@@ -278,7 +347,14 @@ Per-crop leave-counties-out R² in both modes, plus the forward forecast (crops 
   hyperparameter tuning, county lat/lon, and engineered weather/soil interactions
   were all measured against the same honest metrics and **none beat RF+trend** on
   the forward forecast; some (ExtraTrees) raise leave-counties-out R² while
-  *lowering* forward R² — a mirage we declined to ship. Replacing the `year` feature
+  *lowering* forward R² — a mirage we declined to ship. **Added 2026-07-24:** a
+  **gridded water-balance drought index** and **ERA5-Land root-zone soil moisture**
+  both added ~0 to the forecast on top of the weather windows + NDVI (soil moisture
+  even *lowered* winter-wheat skill), because both are reanalyses derived from the
+  same precipitation/temperature the model already has. Per-window mean-temp/GDD and
+  the Apr-May NDVI window were likewise pruned as forward-forecast noise. The one
+  combination with a marginally higher corn forward R² (+weather+NDVI+soil-moisture+
+  drought, 0.472 vs 0.461) *lowered* soybean and wheat and was declined as a mirage. Replacing the `year` feature
   with an explicit linear **detrend** (linear trend + RF on the residual) was also
   tested on the theory that a RandomForest cannot extrapolate `year` past its
   training range; it **slightly hurt** the forward forecast (corn 0.35→0.29) rather
@@ -286,7 +362,7 @@ Per-crop leave-counties-out R² in both modes, plus the forward forecast (crops 
   which holds near its terminal-year level, was already close. A null result, kept
   as a finding rather than tuned away.
 - **Why the ceiling is where it is (measured, not asserted).** A between/within-county
-  variance decomposition of corn yield is **20% between-county / 80% within-county**
+  variance decomposition of corn yield is **20.0% between-county / 80.0% within-county**
   (year to year). The 8 SSURGO soil features are **static per county** — one value,
   no time axis — so they have *zero* variance within a county and can only ever
   address the ~20% between-county share; they contribute literally nothing to the
@@ -351,15 +427,19 @@ correction and reports its quality (slope, R², RMSE, and the raw probe↔lab bi
 calibration removes). A raw probe reading is then mapped to a lab-equivalent value
 and fed into the **same** recommender — nothing upstream changes.
 
-- **What a probe actually adds (the ceiling connection).** The yield model's honest
-  ceiling exists because the feature matrix has *no soil feature that varies within a
-  county over time* — SSURGO is one static snapshot per county, which is why it can
-  only reach corn's ~20% between-county variance and none of the ~80% year-to-year
-  (see the yield ceiling note above). A probe read at a field this season is exactly
-  that missing axis: a **time-varying** soil measurement. Calibrated onto the lab
-  scale it becomes the first feature able to speak to the within-county variance the
-  static SSURGO layer cannot touch — so the seam is where new predictive signal
-  enters, not just finer spatial resolution.
+- **What a probe actually adds (the ceiling connection, sharpened 2026-07-24).** The
+  yield model's honest ceiling exists because the SSURGO feature matrix has *no soil
+  feature that varies within a county over time* — one static snapshot per county, which
+  can only reach corn's ~20% between-county variance and none of the ~80% year-to-year.
+  Adding free *time-varying* public data (weather windows + NDVI) moved the forward
+  forecast 0.28 → 0.46, **confirming the mechanism**. But two free *gridded soil* proxies
+  — a water-balance drought index and ERA5-Land soil moisture — added nothing, because
+  they are reanalyses derived from the *same meteorology* the model already has. That is
+  precisely what makes a real probe valuable and non-redundant: it measures **actual field
+  soil water** (drainage, texture, compaction, management), a time-varying soil signal that
+  is *independent* of the county-mean weather — the one axis neither the static SSURGO layer
+  nor any meteorology-derived reanalysis can supply. Calibrated onto the lab scale, that is
+  where genuinely new predictive signal enters.
 - **No hardware dependency.** Yield, soil, and recommendation modules all run today
   with no sensor. The probe is an *optional* accuracy layer, not a prerequisite.
 - **Honesty.** No probe or probe data exists, so the demo fits on a clearly-labeled

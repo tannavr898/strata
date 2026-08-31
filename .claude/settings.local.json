@@ -6,7 +6,9 @@
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import truststore\" 2>$null)",
       "PowerShell(if \\($?\\) { 'truststore present' } else { 'truststore NOT installed' })",
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import ssl; d=ssl._ssl._test_decode_cert\\(r'C:\\\\Users\\\\maste\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-maste-VSCode-strata\\\\69ea728d-0234-4560-aeec-2ee2efd0c20b\\\\scratchpad\\\\leaf.pem'\\); print\\('SUBJECT:', d.get\\('subject'\\)\\); print\\('ISSUER :', d.get\\('issuer'\\)\\)\")",
-      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pip install truststore --quiet)"
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pip install truststore --quiet)",
+      "Bash(.venv/Scripts/python.exe -c \"import matplotlib; print\\('matplotlib', matplotlib.__version__\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import pandas, sklearn, numpy; print\\('pandas', pandas.__version__, '| sklearn', sklearn.__version__, '| numpy', numpy.__version__\\)\")"
     ]
   }
 }
