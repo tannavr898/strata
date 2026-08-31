@@ -21,12 +21,14 @@ from __future__ import annotations
 import logging
 import os
 import ssl
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
+import numpy as np
 import pandas as pd
 import requests
 import yaml
@@ -404,7 +406,8 @@ class SsurgoSoilLoader(DataSource):
 
     SCHEMA: Dict[str, str] = field(
         default_factory=lambda: {
-            "county_ansi": "3-digit county FIPS parsed from areasymbol; join key to NASS.",
+            "county_ansi": "3-digit county FIPS from the SSURGO laoverlap table; join key "
+                           "to NASS. A MULTI-county survey area emits one row per county.",
             "areasymbol": "SSURGO survey area code, e.g. 'PA029'.",
             "areaname": "Human-readable survey area name.",
             "n_mapunits": "Number of distinct map units summarized (data-density indicator).",
@@ -567,16 +570,49 @@ class SsurgoSoilLoader(DataSource):
         out["dominant_drainage"] = _dominant("drainagecl")
 
         # Identity / provenance columns.
-        out["county_ansi"] = self.areasymbol[2:]  # 'PA029' -> '029'
         out["areasymbol"] = self.areasymbol
         out["areaname"] = self._areaname or ""
         out["n_mapunits"] = int(comp["mukey"].nunique())
 
-        # Order columns to the documented schema.
-        return pd.DataFrame([{k: out.get(k, pd.NA) for k in self.SCHEMA}])
+        # A survey area may cover SEVERAL counties (PA has 5 such areas, e.g. PA605
+        # "Juniata and Mifflin"). Their areasymbol digits are survey-area codes, NOT
+        # county FIPS, so slicing them (the old `areasymbol[2:]`) fabricated codes
+        # like '605' that match no county and silently dropped every county in those
+        # areas from the analysis table. The authoritative mapping comes from SSURGO's
+        # own `laoverlap` table; `load_areas` injects it here. We emit ONE ROW PER
+        # CONSTITUENT COUNTY, each carrying this survey area's soil summary.
+        #
+        # Stated assumption: the counties sharing a survey area are given the SAME
+        # summary, because SSURGO characterized them as one unit -- we cannot split a
+        # joint survey into per-county numbers without the underlying geometry per
+        # county. This is a coarser (but correct) attribution, versus the previous
+        # behavior of discarding those counties entirely.
+        counties = self._county_ansis or [self.areasymbol[2:]]
+        if not self._county_ansis:
+            logger.warning(
+                "[SsurgoSoilLoader] %s has no laoverlap county mapping; falling back "
+                "to the areasymbol slice %r. This is WRONG for multi-county survey "
+                "areas -- use load_areas(), which supplies the mapping.",
+                self.areasymbol, counties[0],
+            )
+        if len(counties) > 1:
+            logger.info(
+                "[SsurgoSoilLoader] %s is a MULTI-county survey area -> emitting %d "
+                "county rows: %s", self.areasymbol, len(counties), counties,
+            )
+
+        rows = []
+        for ansi in counties:
+            row = dict(out)
+            row["county_ansi"] = ansi
+            rows.append({k: row.get(k, pd.NA) for k in self.SCHEMA})
+        return pd.DataFrame(rows)
 
     # Filled in by load_areas (one cheap legend query) so each county row is named.
     _areaname: str = ""
+    # Constituent county FIPS for this survey area, from laoverlap. Injected by
+    # load_areas; usually one, but 5 PA survey areas cover two counties each.
+    _county_ansis: list[str] = field(default_factory=list)
 
     @classmethod
     def list_pa_areas(
@@ -599,6 +635,54 @@ class SsurgoSoilLoader(DataSource):
         resp.raise_for_status()
         header, *rows = resp.json()["Table"]
         return pd.DataFrame(rows, columns=header)
+
+    @classmethod
+    def area_county_map(
+        cls, config: Optional[Dict[str, Any]] = None,
+        session: Optional[requests.Session] = None,
+    ) -> Dict[str, list[str]]:
+        """Map each survey area -> the county FIPS it actually covers.
+
+        SSURGO survey areas are NOT one-to-one with counties: PA has 5 areas that
+        each cover two counties (PA605 Juniata+Mifflin, PA607 Cameron+Elk, PA609
+        Forest+Warren, PA610 Bradford+Sullivan, PA611 Greene+Washington). Their
+        areasymbol digits are survey-area codes, not FIPS, so deriving the county
+        by slicing the symbol invents codes ('605') that join to nothing.
+
+        SSURGO answers this itself: `laoverlap` lists the geographic areas each
+        legend overlaps, and rows with areatypename = 'County or Parish' carry the
+        real county areasymbol ('PA067') whose last 3 digits ARE the county FIPS.
+        One cheap query returns the whole state's mapping.
+        """
+        if config is None:
+            config = load_source_config()
+        cfg = config["ssurgo"]
+        if session is None:
+            use_store = config.get("http", {}).get("use_system_trust_store", True)
+            session = build_session(use_system_trust_store=use_store)
+        prefix = cfg.get("state_areasymbol_prefix", "PA")
+        sql = (
+            "SELECT l.areasymbol, lo.areasymbol AS county_symbol "
+            "FROM legend l JOIN laoverlap lo ON lo.lkey = l.lkey "
+            f"WHERE l.areasymbol LIKE '{prefix}%' "
+            "AND lo.areatypename = 'County or Parish' "
+            "ORDER BY l.areasymbol, lo.areasymbol"
+        )
+        body = {"query": sql, "format": cfg.get("response_format", "JSON+COLUMNNAME")}
+        resp = session.post(cfg["base_url"], json=body, timeout=180)
+        resp.raise_for_status()
+        header, *rows = resp.json()["Table"]
+
+        mapping: Dict[str, list[str]] = {}
+        for areasymbol, county_symbol in rows:
+            mapping.setdefault(areasymbol, []).append(county_symbol[2:])
+
+        multi = {a: c for a, c in mapping.items() if len(c) > 1}
+        logger.info(
+            "[area_county_map] %d survey areas -> %d counties (%d multi-county areas: %s)",
+            len(mapping), sum(len(c) for c in mapping.values()), len(multi), sorted(multi),
+        )
+        return mapping
 
     @classmethod
     def county_centroids(
@@ -628,6 +712,14 @@ class SsurgoSoilLoader(DataSource):
         if areasymbols is None:
             areasymbols = list(areas["areasymbol"])
 
+        # Same multi-county correction as load_areas: a joint survey area must emit a
+        # centroid row for EACH county it covers, or those counties get no weather and
+        # drop at the Daymet join. Stated approximation: both counties of a joint area
+        # share that area's single area-weighted centroid, because the polygons are
+        # tagged by survey area, not by county. That is coarser than a true per-county
+        # centroid but strictly better than having no weather at all for them.
+        county_map = cls.area_county_map(config=config, session=session)
+
         rows = []
         for asym in areasymbols:
             sql = (
@@ -648,12 +740,14 @@ class SsurgoSoilLoader(DataSource):
             wsum = poly["a"].sum()
             lat = (poly["lat"] * poly["a"]).sum() / wsum
             lon = (poly["lon"] * poly["a"]).sum() / wsum
-            rows.append({
-                "county_ansi": asym[2:], "areasymbol": asym,
-                "areaname": name_by_sym.get(asym, ""),
-                "lat": round(lat, 4), "lon": round(lon, 4),
-            })
-            logger.info("[county_centroids] %s -> (%.4f, %.4f)", asym, lat, lon)
+            for ansi in county_map.get(asym, [asym[2:]]):
+                rows.append({
+                    "county_ansi": ansi, "areasymbol": asym,
+                    "areaname": name_by_sym.get(asym, ""),
+                    "lat": round(lat, 4), "lon": round(lon, 4),
+                })
+            logger.info("[county_centroids] %s -> (%.4f, %.4f) for counties %s",
+                        asym, lat, lon, county_map.get(asym, [asym[2:]]))
         return pd.DataFrame(rows)
 
     @classmethod
@@ -677,16 +771,26 @@ class SsurgoSoilLoader(DataSource):
         if areasymbols is None:
             areasymbols = list(areas["areasymbol"])
 
+        # Authoritative survey-area -> county FIPS mapping (one query). Without this,
+        # multi-county survey areas would fabricate non-existent FIPS and their
+        # counties would vanish at the NASS join. See area_county_map().
+        county_map = cls.area_county_map(config=config, session=session)
+
         frames: list[pd.DataFrame] = []
         for i, asym in enumerate(areasymbols, 1):
             loader = cls(areasymbol=asym, config=config, session=session)
             loader._areaname = name_by_sym.get(asym, "")
+            loader._county_ansis = county_map.get(asym, [])
             df = loader.load()
             logger.info("[load_areas] %3d/%d %s -> %d row(s)", i, len(areasymbols), asym, len(df))
             frames.append(df)
 
         combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        logger.info("[load_areas] summarized %d counties.", len(combined))
+        logger.info(
+            "[load_areas] %d survey areas -> %d county rows (%d distinct counties).",
+            len(areasymbols), len(combined),
+            combined["county_ansi"].nunique() if not combined.empty else 0,
+        )
         return combined
 
 
@@ -892,6 +996,8 @@ class DaymetWeatherLoader(DataSource):
             "tmin_mean_c": "Mean daily min temperature (C) over the season.",
             "heat_days_30c": "Count of days with Tmax >= heat threshold (heat stress).",
             "n_season_days": "Days contributing (sanity check; ~214 for Apr-Oct).",
+            "waterbal_season_mm": "Climatic water balance = precip - Hargreaves PET (mm) over "
+                                  "the season; negative = moisture deficit (a drought signal).",
         }
     )
 
@@ -901,6 +1007,29 @@ class DaymetWeatherLoader(DataSource):
         if "daymet" not in self.config:
             raise KeyError("sources.yaml has no 'daymet' section.")
         self._cfg = self.config["daymet"]
+
+        # Optional sub-season phenology windows (config-driven). For each window we
+        # emit the SAME five stats as the full season, suffixed by the window name,
+        # so the per-crop model can see WHEN in the season heat/water fell rather
+        # than only the season total. Extending the instance SCHEMA here keeps the
+        # documented-columns contract intact for the extra columns tidy() produces.
+        self._windows = list(self._cfg.get("season_windows", []) or [])
+        gdd_base = self._cfg.get("gdd_base_c", 10)
+        win_schema: Dict[str, str] = {}
+        for w in self._windows:
+            n, s, e = w["name"], w["start_yday"], w["end_yday"]
+            win_schema[f"gdd_{n}"] = f"GDD (base {gdd_base}C) summed over the '{n}' window (yday {s}-{e})."
+            win_schema[f"precip_{n}_mm"] = f"Precipitation (mm) summed over the '{n}' window (yday {s}-{e})."
+            win_schema[f"tmax_{n}_c"] = f"Mean daily Tmax (C) over the '{n}' window (yday {s}-{e})."
+            win_schema[f"tmin_{n}_c"] = f"Mean daily Tmin (C) over the '{n}' window (yday {s}-{e})."
+            win_schema[f"heat_days_{n}"] = f"Days with Tmax >= heat threshold in the '{n}' window (yday {s}-{e})."
+            win_schema[f"waterbal_{n}_mm"] = (
+                f"Climatic water balance (precip - PET, mm) over the '{n}' window "
+                f"(yday {s}-{e}); negative = deficit."
+            )
+        # Instance-level (each loader owns its SCHEMA dict via the dataclass factory).
+        self.SCHEMA = {**self.SCHEMA, **win_schema}
+
         if self.session is None:
             use_store = self.config.get("http", {}).get("use_system_trust_store", True)
             self.session = build_session(use_system_trust_store=use_store)
@@ -947,28 +1076,73 @@ class DaymetWeatherLoader(DataSource):
             elif low.startswith("year"): rename[col] = "year"
         df = df.rename(columns=rename)
 
-        # Restrict to the growing-season window (inclusive yday bounds).
-        s0, s1 = self._cfg["season_start_yday"], self._cfg["season_end_yday"]
-        season = df[(df["yday"] >= s0) & (df["yday"] <= s1)].copy()
-
-        # Daily growing-degree-days, base 10 C: max(0, mean(tmax,tmin) - base).
+        # Daily growing-degree-days (base 10 C) and a heat-stress flag, computed
+        # ONCE on every day so the same day-level series feeds both the full-season
+        # aggregate and each sub-season window below.
         base = float(self._cfg.get("gdd_base_c", 10))
-        season["tmean"] = (season["tmax"] + season["tmin"]) / 2.0
-        season["gdd"] = (season["tmean"] - base).clip(lower=0)
         heat = float(self._cfg.get("heat_threshold_c", 30))
+        df["tmean"] = (df["tmax"] + df["tmin"]) / 2.0
+        df["gdd"] = (df["tmean"] - base).clip(lower=0)
+        df["is_heat"] = (df["tmax"] >= heat).astype(int)
 
-        # Aggregate each year into one feature row.
-        out = season.groupby("year").apply(
-            lambda g: pd.Series({
-                "gdd_base10": round(g["gdd"].sum(), 1),
-                "precip_total_mm": round(g["prcp"].sum(), 1),
-                "tmax_mean_c": round(g["tmax"].mean(), 2),
-                "tmin_mean_c": round(g["tmin"].mean(), 2),
-                "heat_days_30c": int((g["tmax"] >= heat).sum()),
-                "n_season_days": int(len(g)),
-            }),
-            include_groups=False,
-        ).reset_index()
+        # Daily climatic water balance = precip - Hargreaves-Samani reference PET (mm).
+        # PET_HS = 0.0023 * Ra * (Tmean + 17.8) * sqrt(Tmax - Tmin), with Ra the
+        # extraterrestrial radiation (FAO-56) from latitude + day-of-year, converted
+        # MJ/m2/day -> mm/day (x0.408). This turns raw temps into evaporative demand,
+        # so precip - PET is a real moisture-deficit (drought) signal that neither
+        # precip nor temperature alone carries. Hargreaves needs only Tmax/Tmin/Tmean,
+        # which Daymet already gives -- no extra data source.
+        lat = np.radians(self.lat)
+        j = df["yday"].to_numpy(dtype=float)
+        dr = 1.0 + 0.033 * np.cos(2.0 * np.pi / 365.0 * j)           # inverse earth-sun dist
+        decl = 0.409 * np.sin(2.0 * np.pi / 365.0 * j - 1.39)        # solar declination
+        ws = np.arccos(np.clip(-np.tan(lat) * np.tan(decl), -1.0, 1.0))  # sunset hour angle
+        ra = (24.0 * 60.0 / np.pi) * 0.0820 * dr * (
+            ws * np.sin(lat) * np.sin(decl) + np.cos(lat) * np.cos(decl) * np.sin(ws)
+        )                                                            # MJ/m2/day
+        ra_mm = 0.408 * ra                                           # -> mm/day
+        tdiff = (df["tmax"] - df["tmin"]).clip(lower=0)
+        pet = 0.0023 * ra_mm * (df["tmean"] + 17.8) * np.sqrt(tdiff)
+        df["waterbal"] = df["prcp"] - pet                           # mm/day; <0 = deficit
+
+        def _agg(g: pd.DataFrame) -> pd.Series:
+            """The growing-season stats + water balance + a day count, for any yday slice."""
+            return pd.Series({
+                "gdd": round(g["gdd"].sum(), 1),
+                "precip": round(g["prcp"].sum(), 1),
+                "tmax": round(g["tmax"].mean(), 2),
+                "tmin": round(g["tmin"].mean(), 2),
+                "heat": int(g["is_heat"].sum()),
+                "waterbal": round(g["waterbal"].sum(), 1),
+                "ndays": int(len(g)),
+            })
+
+        def _yearly(slice_df: pd.DataFrame) -> pd.DataFrame:
+            return slice_df.groupby("year").apply(_agg, include_groups=False).reset_index()
+
+        # Full growing season (Apr-Oct) -> the original five features (names unchanged).
+        s0, s1 = self._cfg["season_start_yday"], self._cfg["season_end_yday"]
+        season = df[(df["yday"] >= s0) & (df["yday"] <= s1)]
+        out = _yearly(season).rename(columns={
+            "gdd": "gdd_base10", "precip": "precip_total_mm",
+            "tmax": "tmax_mean_c", "tmin": "tmin_mean_c",
+            "heat": "heat_days_30c", "ndays": "n_season_days",
+            "waterbal": "waterbal_season_mm",
+        })
+
+        # Each sub-season window -> the same five stats, suffixed by the window name.
+        # Left-merged on year so a window with no days in some year (shouldn't happen
+        # for Apr-Oct windows) surfaces as NaN rather than dropping the year.
+        for w in self._windows:
+            n = w["name"]
+            wslice = df[(df["yday"] >= w["start_yday"]) & (df["yday"] <= w["end_yday"])]
+            wagg = _yearly(wslice).drop(columns=["ndays"]).rename(columns={
+                "gdd": f"gdd_{n}", "precip": f"precip_{n}_mm",
+                "tmax": f"tmax_{n}_c", "tmin": f"tmin_{n}_c", "heat": f"heat_days_{n}",
+                "waterbal": f"waterbal_{n}_mm",
+            })
+            out = out.merge(wagg, on="year", how="left")
+
         out.insert(0, "county_ansi", self.county_ansi)
         return out[list(self.SCHEMA)]
 
@@ -995,6 +1169,286 @@ class DaymetWeatherLoader(DataSource):
         combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         logger.info("[load_counties] %d county-year weather rows.", len(combined))
         return combined
+
+
+@dataclass
+class OpenMeteoSoilLoader(DataSource):
+    """Loader for ERA5-Land root-zone SOIL MOISTURE via the Open-Meteo Archive API.
+
+    One instance = one county (its centroid lat/lon). A single Archive call returns
+    hourly volumetric soil moisture for the whole year range; `tidy` averages the
+    two root-zone layers into a plant-available-water proxy and collapses it to ONE
+    row per year of growing-season + phenology-window means -- the SAME county-year
+    grain and the SAME windows as the Daymet weather features, so it joins on
+    ["county_ansi", "year"] exactly like weather.
+
+    WHY this source: the yield model's honest ceiling exists because no feature
+    varies WITHIN a county over time. ERA5-Land soil moisture is a free, gridded,
+    TIME-VARYING soil measurement -- the same axis a field probe would add, previewed
+    from public data. Free, no API key (Open-Meteo Archive).
+
+    GRANULARITY NOTE (council rule): ERA5-Land is ~9 km, so one county-centroid point
+    is coarse for a large county -- it addresses the time axis, not field resolution.
+    Stated, not hidden.
+    """
+
+    county_ansi: str
+    lat: float
+    lon: float
+    config: Optional[Dict[str, Any]] = None
+    api_key: Optional[str] = None  # unused; interface parity
+    session: Optional[requests.Session] = None
+    timeout: int = 300
+
+    SCHEMA: Dict[str, str] = field(
+        default_factory=lambda: {
+            "county_ansi": "3-digit county FIPS; join key to NASS/SSURGO/Daymet.",
+            "year": "Calendar year (int).",
+            "soilmoist_root_season": "Growing-season (Apr-Oct) mean root-zone volumetric "
+                                     "soil moisture (m3/m3), ERA5-Land 7-100 cm (2 layers averaged).",
+        }
+    )
+
+    def __post_init__(self) -> None:
+        if self.config is None:
+            self.config = load_source_config()
+        if "openmeteo" not in self.config:
+            raise KeyError("sources.yaml has no 'openmeteo' section.")
+        self._cfg = self.config["openmeteo"]
+
+        # Growing-season + phenology windows are SHARED with Daymet (same season),
+        # so the soil-moisture windows line up exactly with the weather windows.
+        day = self.config.get("daymet", {})
+        self._s0 = day.get("season_start_yday", 91)
+        self._s1 = day.get("season_end_yday", 304)
+        self._windows = list(day.get("season_windows", []) or [])
+
+        # Extend the schema with one season mean per window (mirrors the season col).
+        win_schema: Dict[str, str] = {}
+        for w in self._windows:
+            n, s, e = w["name"], w["start_yday"], w["end_yday"]
+            win_schema[f"soilmoist_root_{n}"] = (
+                f"Mean root-zone soil moisture (m3/m3) over the '{n}' window (doy {s}-{e})."
+            )
+        self.SCHEMA = {**self.SCHEMA, **win_schema}
+
+        if self.session is None:
+            use_store = self.config.get("http", {}).get("use_system_trust_store", True)
+            self.session = build_session(use_system_trust_store=use_store)
+
+    def fetch(self) -> Dict[str, Any]:
+        """GET the Open-Meteo Archive hourly soil moisture for this centroid (all years).
+
+        The free Archive API enforces a per-minute request-weight budget, and a
+        multi-decade hourly request is heavy, so a batch of counties trips HTTP 429.
+        We retry with a fixed backoff (the limit resets each minute) rather than
+        failing the whole pull; `load_counties` also paces calls between counties.
+        """
+        params = {
+            "latitude": self.lat,
+            "longitude": self.lon,
+            "start_date": f"{self._cfg['start_year']}-01-01",
+            "end_date": f"{self._cfg['end_year']}-12-31",
+            "hourly": self._cfg.get("hourly_vars",
+                                    "soil_moisture_7_to_28cm,soil_moisture_28_to_100cm"),
+            "timezone": "UTC",
+        }
+        logger.info("[OpenMeteoSoilLoader] county %s GET Open-Meteo (%.3f, %.3f)",
+                    self.county_ansi, self.lat, self.lon)
+        # The Archive tier caps request-weight per MINUTE and per HOUR. A 24-year
+        # hourly call is heavy (~40 fit in an hour), so a big batch trips both. We
+        # read the 429 reason and wait the right amount: ~1 min for a minutely cap,
+        # but a full cool-down for an hourly cap (a 65s wait cannot outlast it).
+        min_backoff = float(self._cfg.get("retry_backoff_s", 65))
+        hour_backoff = float(self._cfg.get("hourly_backoff_s", 600))
+        max_retries = int(self._cfg.get("max_retries", 12))
+        for attempt in range(max_retries + 1):
+            resp = self.session.get(self._cfg["base_url"], params=params, timeout=self.timeout)
+            if resp.status_code == 200:
+                return resp.json().get("hourly", {})
+            if resp.status_code == 429 and attempt < max_retries:
+                try:
+                    reason = resp.json().get("reason", "")
+                except ValueError:
+                    reason = resp.text[:120]
+                hourly = "hour" in reason.lower() or "dail" in reason.lower()
+                wait = hour_backoff if hourly else min_backoff
+                logger.warning(
+                    "[OpenMeteoSoilLoader] county %s rate-limited (429: %s); backing off "
+                    "%.0fs (attempt %d/%d)",
+                    self.county_ansi, reason or "no reason", wait, attempt + 1, max_retries,
+                )
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Open-Meteo HTTP {resp.status_code}: {resp.text[:200]}")
+        raise RuntimeError(
+            f"Open-Meteo: exhausted {max_retries} retries for county {self.county_ansi}."
+        )
+
+    def tidy(self, raw: Dict[str, Any]) -> pd.DataFrame:
+        """Average the two root-zone layers and aggregate to county-year window means."""
+        if not raw or "time" not in raw:
+            logger.warning("[OpenMeteoSoilLoader] county %s: no hourly data.", self.county_ansi)
+            return pd.DataFrame(columns=list(self.SCHEMA))
+
+        # Build a frame from whatever soil_moisture_* layers were returned, so the
+        # loader works whether the config requests one root-zone layer or several.
+        layer_keys = [k for k in raw if str(k).startswith("soil_moisture")]
+        data: Dict[str, Any] = {"time": pd.to_datetime(raw["time"])}
+        for k in layer_keys:
+            data[k] = pd.to_numeric(pd.Series(raw[k]), errors="coerce")
+        df = pd.DataFrame(data)
+        df["year"] = df["time"].dt.year
+        df["doy"] = df["time"].dt.dayofyear
+        # Root-zone plant-available-water proxy: mean over the requested root-zone
+        # layer(s), skipping nulls (default: the single 7-28 cm layer).
+        df["sm_root"] = df[layer_keys].mean(axis=1)
+
+        def _yearly_mean(slice_df: pd.DataFrame, colname: str) -> pd.DataFrame:
+            return (slice_df.groupby("year")["sm_root"].mean().round(4)
+                    .reset_index().rename(columns={"sm_root": colname}))
+
+        # Full growing season, then each phenology window (same doy bounds as weather).
+        season = df[(df["doy"] >= self._s0) & (df["doy"] <= self._s1)]
+        out = _yearly_mean(season, "soilmoist_root_season")
+        for w in self._windows:
+            wslice = df[(df["doy"] >= w["start_yday"]) & (df["doy"] <= w["end_yday"])]
+            out = out.merge(_yearly_mean(wslice, f"soilmoist_root_{w['name']}"),
+                            on="year", how="left")
+
+        out.insert(0, "county_ansi", self.county_ansi)
+        return out[list(self.SCHEMA)]
+
+    @classmethod
+    def load_counties(
+        cls, centroids: pd.DataFrame, config: Optional[Dict[str, Any]] = None
+    ) -> pd.DataFrame:
+        """Pull ERA5-Land soil moisture for every county in a centroids frame and stack.
+
+        `centroids` must have columns county_ansi, lat, lon (from
+        SsurgoSoilLoader.county_centroids -- the SAME centroids Daymet uses).
+        """
+        if config is None:
+            config = load_source_config()
+        use_store = config.get("http", {}).get("use_system_trust_store", True)
+        session = build_session(use_system_trust_store=use_store)
+
+        # Pace calls to stay under the Archive API's per-minute weight budget (heavy
+        # multi-decade hourly requests). fetch() additionally backs off on any 429.
+        pace = float(config.get("openmeteo", {}).get("inter_request_s", 3))
+        frames: list[pd.DataFrame] = []
+        for i, (_, row) in enumerate(centroids.iterrows()):
+            loader = cls(county_ansi=row["county_ansi"], lat=float(row["lat"]),
+                         lon=float(row["lon"]), config=config, session=session)
+            frames.append(loader.load())
+            if pace and i < len(centroids) - 1:
+                time.sleep(pace)
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        logger.info("[load_counties] %d county-year soil-moisture rows.", len(combined))
+        return combined
+
+
+@dataclass
+class NDVICropLoader(DataSource):
+    """Loader for cropland-masked MODIS NDVI via Google Earth Engine.
+
+    Produces ONE tidy row per county-year: the cropland-masked mean NDVI over each
+    phenology window (Apr-May / Jun / Jul), TIME-GATED to <= July so late-season
+    greenness -- which is almost the harvested yield itself -- cannot leak into the
+    forecast. Same county-year grain as weather, so it joins on (county_ansi, year).
+
+    WHY NDVI is the source that helped (where the gridded reanalyses did not): it is a
+    direct satellite OBSERVATION of the crop (vigor, management, pest stress), carrying
+    information the meteorology-derived weather/soil-moisture features do not.
+
+    Requirements (heavy dep, isolated here): `earthengine-api`, a one-time
+    `earthengine authenticate` (see scripts/ee_authenticate.py -- it injects truststore
+    so the OAuth token exchange survives the local Norton TLS interception), and an EE
+    project id read from the environment (never committed). `ee` is imported lazily so
+    importing this module does NOT require Earth Engine.
+    """
+
+    config: Optional[Dict[str, Any]] = None
+    api_key: Optional[str] = None  # unused; interface parity
+    session: Optional[requests.Session] = None  # unused; EE has its own transport
+
+    SCHEMA: Dict[str, str] = field(
+        default_factory=lambda: {
+            "county_ansi": "3-digit county FIPS (from TIGER GEOID); join key to NASS/weather.",
+            "year": "Calendar year (int).",
+        }
+    )
+
+    def __post_init__(self) -> None:
+        if self.config is None:
+            self.config = load_source_config()
+        if "ndvi" not in self.config:
+            raise KeyError("sources.yaml has no 'ndvi' section.")
+        self._cfg = self.config["ndvi"]
+        self._project = os.environ.get(self._cfg.get("project_env", "EE_PROJECT"))
+        self._windows = list(self._cfg.get("windows", []))
+        win_schema = {
+            f"ndvi_{w['name']}": f"Cropland-masked mean MODIS NDVI over {w['start']}..{w['end']} (exclusive)."
+            for w in self._windows
+        }
+        self.SCHEMA = {**self.SCHEMA, **win_schema}
+
+    def _init_ee(self):
+        """Lazy-import Earth Engine, inject the OS trust store, and initialize."""
+        import truststore  # OS trust store: EE's client uses urllib/httplib2, not our session
+        truststore.inject_into_ssl()
+        import ee
+
+        if not self._project:
+            raise RuntimeError(
+                f"No Earth Engine project id. Set {self._cfg.get('project_env', 'EE_PROJECT')} "
+                f"in your environment / .env, and run scripts/ee_authenticate.py once."
+            )
+        ee.Initialize(project=self._project)
+        return ee
+
+    def fetch(self) -> list[dict]:
+        """Run one reduceRegions per year over the PA counties; return record dicts."""
+        ee = self._init_ee()
+        counties = (ee.FeatureCollection(self._cfg["counties_asset"])
+                    .filter(ee.Filter.eq("STATEFP", self._cfg["state_fp"])))
+        coll = ee.ImageCollection(self._cfg["collection"]).select(self._cfg["ndvi_band"])
+        cropmask = ee.Image(self._cfg["cropland_asset"]).select("cultivated").eq(2)
+        scale = float(self._cfg.get("ndvi_scale", 0.0001))
+        rscale = int(self._cfg.get("reduce_scale_m", 250))
+
+        rows: list[dict] = []
+        for year in range(int(self._cfg["start_year"]), int(self._cfg["end_year"]) + 1):
+            img = None
+            for w in self._windows:
+                band = (coll.filterDate(f"{year}-{w['start']}", f"{year}-{w['end']}")
+                        .mean().multiply(scale).rename(f"ndvi_{w['name']}"))
+                img = band if img is None else img.addBands(band)
+            fc = img.updateMask(cropmask).reduceRegions(counties, ee.Reducer.mean(), scale=rscale)
+            for feat in fc.getInfo()["features"]:
+                p = feat["properties"]
+                row = {"county_ansi": str(p["GEOID"])[2:].zfill(3), "year": year}
+                for w in self._windows:
+                    row[f"ndvi_{w['name']}"] = p.get(f"ndvi_{w['name']}")
+                rows.append(row)
+            logger.info("[NDVICropLoader] year %d done (%d counties)", year, counties.size().getInfo())
+        return rows
+
+    def tidy(self, raw: list[dict]) -> pd.DataFrame:
+        if not raw:
+            logger.warning("[NDVICropLoader] no NDVI records returned.")
+            return pd.DataFrame(columns=list(self.SCHEMA))
+        df = pd.DataFrame(raw)
+        for c in df.columns:
+            if c.startswith("ndvi_") or c == "year":
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.sort_values(["county_ansi", "year"]).reset_index(drop=True)
+        return df[list(self.SCHEMA)]
+
+    @classmethod
+    def load_all(cls, config: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+        """Convenience: pull every PA county-year of NDVI into one tidy frame."""
+        return cls(config=config).load()
 
 
 def _print_coverage_report(df: pd.DataFrame) -> None:

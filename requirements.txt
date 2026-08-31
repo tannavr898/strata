@@ -22,6 +22,13 @@ truststore>=0.9,<1.0      # validate TLS against the OS trust store (pure-Python
 # --- Reporting / inspection ---
 matplotlib>=3.7,<4.0      # confusion matrix + diagnostic plots for the soil classifier / yield model
 
+# --- Satellite / remote sensing (NDVI source) ---
+earthengine-api>=1.0,<2.0 # Google Earth Engine client -> MODIS NDVI, cropland-masked, aggregated
+                          #   to county-year. A "heavy" dep, added deliberately (see README):
+                          #   it needs a free Earth Engine account + a one-time
+                          #   `earthengine authenticate` and a Google Cloud project id. Only the
+                          #   NDVI loader imports it; the rest of Strata has no dependency on it.
+
 # -----------------------------------------------------------------------------
 # DELIBERATELY DEFERRED (ask before adding — these are the "heavy" deps):
 #   - SSURGO/SDA: plain `requests` against the SDA POST endpoint avoids a GIS stack.

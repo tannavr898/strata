@@ -34,6 +34,67 @@ daymet:
   heat_threshold_c: 30          # count days with Tmax >= this as heat-stress days
   centroid_topn: 2000           # # largest SSURGO polygons used for area-weighted county centroid
 
+  # Sub-season phenology windows (Daymet 365-day yday bounds, inclusive). The
+  # full-season Apr-Oct aggregates above are KEPT; these add TIMING resolution so
+  # the model can see e.g. a July (corn silking/pollination) dry spell or heat
+  # burst that a whole-season total averages away -- the within-year signal the
+  # ceiling analysis says the current season aggregates discard. Windows are
+  # crop-AGNOSTIC (the weather table is county-year, shared by every crop), so
+  # each per-crop model learns which window matters for it. `name` is used as the
+  # feature-column suffix, so keep the names short and stable.
+  season_windows:
+    - {name: "aprmay", start_yday: 91,  end_yday: 151}   # Apr 1 - May 31: planting / establishment
+    - {name: "jun",    start_yday: 152, end_yday: 181}   # June: vegetative growth
+    - {name: "jul",    start_yday: 182, end_yday: 212}   # July: silking / pollination (critical for corn)
+    - {name: "augoct", start_yday: 213, end_yday: 304}   # Aug 1 - Oct 31: grain fill + maturity
+
+openmeteo:
+  # Open-Meteo Historical Weather (Archive) API -> ERA5-Land reanalysis. Free, no
+  # API key. We pull hourly root-zone volumetric SOIL MOISTURE (m3/m3) per county
+  # centroid and aggregate to county-year growing-season + phenology-window means.
+  # This is the free, gridded "preview" of the probe's moisture channel: a
+  # time-varying soil measurement, the axis the static SSURGO snapshot cannot supply.
+  base_url: "https://archive-api.open-meteo.com/v1/archive"
+  # Primary root-zone layer (7-28 cm). ONE layer, not two: a 24-year hourly request
+  # is heavy on the free Archive tier's per-hour weight budget, and a single layer
+  # roughly halves the cost so all 67 counties fit in one hourly window. 7-28 cm is
+  # the main active root zone for annual crops; tidy() averages whatever layers are
+  # configured, so adding soil_moisture_28_to_100cm back here needs no code change.
+  hourly_vars: "soil_moisture_7_to_28cm"
+  start_year: 2000              # match NASS/Daymet
+  end_year: 2023                # match Daymet coverage (yields past this lack weather+moisture)
+  inter_request_s: 3            # polite pacing between counties
+  retry_backoff_s: 65           # wait after a per-MINUTE 429 (limit resets each minute)
+  hourly_backoff_s: 600         # wait after a per-HOUR 429 (limit resets each clock hour)
+  max_retries: 12
+  # NOTE: the growing-season window + phenology sub-windows are read from the
+  # `daymet` section above, so the soil-moisture windows line up EXACTLY with the
+  # weather windows (same season, same yday bounds -- one shared definition).
+
+ndvi:
+  # MODIS NDVI via Google Earth Engine -> cropland-masked county-year NDVI, time-gated
+  # to <= July (no harvest leakage). Requires a one-time `earthengine authenticate`
+  # (see scripts/ee_authenticate.py) and a Google Cloud / Earth Engine project id. The
+  # project id is USER-SPECIFIC, so it is read from the environment, never committed.
+  project_env: "EE_PROJECT"
+  collection: "MODIS/061/MOD13Q1"
+  ndvi_band: "NDVI"
+  ndvi_scale: 0.0001                       # MODIS NDVI is stored x10000
+  cropland_asset: "USDA/NASS/CDL/2020"     # fixed cropland mask (cultivated==2) for all years
+  counties_asset: "TIGER/2018/Counties"
+  state_fp: "42"                           # Pennsylvania FIPS
+  reduce_scale_m: 250                      # MODIS NDVI native ~231 m
+  start_year: 2000
+  end_year: 2023
+  # Phenology windows (calendar month-day, end EXCLUSIVE). Aug-Oct is omitted on
+  # purpose: late-season greenness is almost the harvested yield, so including it
+  # would leak the forecast. Jun+Jul are the shipped features; aprmay is pulled for
+  # the record but pruned from the model (pre-emergence bare soil).
+  windows:
+    - {name: "aprmay", start: "04-01", end: "06-01"}
+    - {name: "jun",    start: "06-01", end: "07-01"}
+    - {name: "jul",    start: "07-01", end: "08-01"}
+
 kssl:
   # NCSS/KSSL Soil Characterization (Lab Data Mart) via the SAME SDA web service.
   # Pulls real lab pedons (chemistry + a Soil Taxonomy class label) to TRAIN the
