@@ -4,7 +4,11 @@
 {% block content %}
 <h1>Fields</h1>
 {% if not fields %}
-  <p class="give">No fields yet. Run <code>python scripts/seed_db.py</code> to create a demo field.</p>
+  <p class="give">No fields yet.</p>
+  <div class="cardlinks">
+    <a class="cardlink primary" href="/fields/new{% if details %}?details=true{% endif %}">Add a field</a>
+  </div>
+  <p class="give">Or run <code>python scripts/seed_db.py</code> for two demo fields.</p>
 {% else %}
   <div class="sites">
     {% for f in fields %}
@@ -15,6 +19,9 @@
         {% if f.acres %}<span class="site-geo">{{ f.acres }} acres</span>{% endif %}
       </a>
     {% endfor %}
+  </div>
+  <div class="cardlinks">
+    <a class="cardlink" href="/fields/new{% if details %}?details=true{% endif %}">Add a field</a>
   </div>
 {% endif %}
 {% endblock %}

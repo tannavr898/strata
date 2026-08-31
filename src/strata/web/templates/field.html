@@ -6,7 +6,10 @@
 <p class="sub">
   {{ field.county_name }} County &middot; {{ field.crop|crop }}
   {% if field.acres %}&middot; {{ field.acres }} acres{% endif %}
+  &middot; <a class="editlink" href="/field/{{ field.id }}/edit{% if details %}?details=true{% endif %}">edit</a>
 </p>
+
+{% if error %}<div class="formerror">{{ error }}</div>{% endif %}
 
 <!-- ── Yield ──────────────────────────────────────────────────────────── -->
 <section class="card">
@@ -169,6 +172,25 @@
       {% endfor %}
     </div>
   {% endif %}
+
+  <details class="addsite">
+    <summary>Add a spot</summary>
+    <form method="post" class="form"
+          action="/field/{{ field.id }}/sites{% if details %}?details=true{% endif %}">
+      <div class="row">
+        <label><span>Name</span>
+          <input type="text" name="label" maxlength="120" required placeholder="Upper bench"></label>
+        <label><span>Latitude <em>optional</em></span>
+          <input type="number" step="any" name="lat" placeholder="39.9640"></label>
+        <label><span>Longitude <em>optional</em></span>
+          <input type="number" step="any" name="lon" placeholder="-75.6300"></label>
+      </div>
+      <label class="full"><span>Notes</span>
+        <input type="text" name="notes" maxlength="500"
+               placeholder="Well drained, top of slope"></label>
+      <div class="actions"><button type="submit">Add spot</button></div>
+    </form>
+  </details>
 
   {% if channels %}
     <div class="cardlinks">

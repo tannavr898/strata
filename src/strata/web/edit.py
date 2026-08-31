@@ -23,7 +23,9 @@ from strata import db
 from strata.calibration import ProbeCalibration
 from strata.probe import CHANNELS
 from strata.web import forms
-from strata.web.core import base_context, not_found, templates
+from strata.web.core import (
+    base_context, modelled_crops, not_found, pa_counties, templates,
+)
 
 logger = logging.getLogger("strata.web.edit")
 
@@ -242,3 +244,96 @@ async def calibration_submit(request: Request, details: bool = False):
     return _back("/calibration", details,
                  fitted=f"{channel}: R2 {fit.r2:.3f} from {fit.n} pairs, "
                         f"applied to {applied} readings.")
+
+
+# --------------------------------------------------------------------------- #
+# Fields and sites — so the app can be used without writing SQL
+# --------------------------------------------------------------------------- #
+@router.get("/fields/new", response_class=HTMLResponse)
+def field_new_form(request: Request, details: bool = False,
+                   error: Optional[str] = None):
+    ctx = base_context(request, details)
+    ctx.update({"field": None, "counties": pa_counties(),
+                "crops": modelled_crops(), "error": error})
+    return templates.TemplateResponse(request, "field_form.html", ctx)
+
+
+@router.get("/field/{field_id}/edit", response_class=HTMLResponse)
+def field_edit_form(request: Request, field_id: int, details: bool = False,
+                    error: Optional[str] = None):
+    conn = db.init_db()
+    field = db.get_field(conn, field_id)
+    conn.close()
+    if field is None:
+        return not_found(request, details, f"No field with id {field_id}.")
+
+    ctx = base_context(request, details)
+    ctx.update({"field": field, "counties": pa_counties(),
+                "crops": modelled_crops(), "error": error})
+    return templates.TemplateResponse(request, "field_form.html", ctx)
+
+
+@router.post("/fields/new")
+async def field_create(request: Request, details: bool = False):
+    form = await request.form()
+    try:
+        values = forms.parse_field(form, pa_counties(), modelled_crops())
+    except forms.ValidationError as exc:
+        return _back("/fields/new", details, error=str(exc))
+
+    conn = db.init_db()
+    with conn:
+        field_id = conn.execute(
+            """INSERT INTO field (name, county_ansi, county_name, crop, acres, notes)
+               VALUES (:name, :county_ansi, :county_name, :crop, :acres, :notes)""",
+            values,
+        ).lastrowid
+    conn.close()
+    logger.info("Created field %d (%s, %s)", field_id, values["name"], values["crop"])
+    return _back(f"/field/{field_id}", details)
+
+
+@router.post("/field/{field_id}/edit")
+async def field_update(request: Request, field_id: int, details: bool = False):
+    form = await request.form()
+    try:
+        values = forms.parse_field(form, pa_counties(), modelled_crops())
+    except forms.ValidationError as exc:
+        return _back(f"/field/{field_id}/edit", details, error=str(exc))
+
+    conn = db.init_db()
+    if db.get_field(conn, field_id) is None:
+        conn.close()
+        return not_found(request, details, f"No field with id {field_id}.")
+    with conn:
+        conn.execute(
+            """UPDATE field SET name = :name, county_ansi = :county_ansi,
+                                county_name = :county_name, crop = :crop,
+                                acres = :acres, notes = :notes
+                WHERE id = :id""",
+            {**values, "id": field_id},
+        )
+    conn.close()
+    return _back(f"/field/{field_id}", details)
+
+
+@router.post("/field/{field_id}/sites")
+async def site_create(request: Request, field_id: int, details: bool = False):
+    form = await request.form()
+    try:
+        values = forms.parse_site(form)
+    except forms.ValidationError as exc:
+        return _back(f"/field/{field_id}", details, error=str(exc))
+
+    conn = db.init_db()
+    if db.get_field(conn, field_id) is None:
+        conn.close()
+        return not_found(request, details, f"No field with id {field_id}.")
+    with conn:
+        conn.execute(
+            """INSERT INTO site (field_id, label, lat, lon, notes)
+               VALUES (:field_id, :label, :lat, :lon, :notes)""",
+            {"field_id": field_id, **values},
+        )
+    conn.close()
+    return _back(f"/field/{field_id}", details)

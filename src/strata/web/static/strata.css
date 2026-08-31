@@ -305,3 +305,16 @@ code {
 .cardlink:hover { border-color: var(--green); color: var(--green); }
 .cardlink.primary { background: var(--green); color: var(--surface); border-color: transparent; }
 .cardlink.primary:hover { filter: brightness(1.08); color: var(--surface); }
+
+/* ── inline add-a-spot disclosure ────────────────────────────────────── */
+.addsite { margin-top: 1rem; }
+.addsite > summary {
+  cursor: pointer; color: var(--ink-soft); font-size: .9rem; font-weight: 600;
+  padding: .45rem .85rem; border: 1px solid var(--line); border-radius: 8px;
+  display: inline-block; list-style: none;
+}
+.addsite > summary::-webkit-details-marker { display: none; }
+.addsite > summary:hover { border-color: var(--green); color: var(--green); }
+.addsite[open] > summary { margin-bottom: .3rem; }
+.editlink { color: var(--ink-faint); text-decoration: underline; }
+.editlink:hover { color: var(--green); }

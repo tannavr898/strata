@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit ' + field.name if field else 'New field' }} — Strata{% endblock %}
+
+{% block content %}
+{% if field %}
+  <p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
+  <h1>Edit field</h1>
+{% else %}
+  <p class="crumb"><a href="/{% if details %}?details=true{% endif %}">&larr; Fields</a></p>
+  <h1>Add a field</h1>
+{% endif %}
+
+{% if error %}<div class="formerror">{{ error }}</div>{% endif %}
+
+<section class="card">
+  <form method="post" class="form"
+        action="{{ ('/field/' ~ field.id ~ '/edit') if field else '/fields/new' }}{% if details %}?details=true{% endif %}">
+
+    <label class="full">
+      <span>Field name</span>
+      <input type="text" name="name" maxlength="120" required
+             value="{{ field.name if field else '' }}" placeholder="North Field">
+    </label>
+
+    <div class="row">
+      <label>
+        <span>County</span>
+        <select name="county_ansi" required>
+          <option value="">Choose a county…</option>
+          {% for ansi, name in counties.items() %}
+            <option value="{{ ansi }}"
+              {% if field and field.county_ansi == ansi %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Crop</span>
+        <select name="crop" required>
+          <option value="">Choose a crop…</option>
+          {% for c in crops %}
+            <option value="{{ c }}"
+              {% if field and field.crop == c %}selected{% endif %}>{{ c|crop }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Acres</span>
+        <input type="number" step="any" min="0" name="acres"
+               value="{{ field.acres if field and field.acres is not none else '' }}">
+      </label>
+    </div>
+
+    <p class="give hint">
+      Strata's soil and weather data is county-level, so the county decides which
+      public data backs this field. Every crop Strata has modelled is listed &mdash;
+      including the ones it can't forecast well enough to give you a number for. Pick
+      the crop you actually grow; if it's one of those, you'll still get soil and
+      fertilizer advice, and an honest explanation instead of a yield estimate.
+    </p>
+
+    <label class="full">
+      <span>Notes</span>
+      <textarea name="notes" rows="2" maxlength="500">{{ field.notes if field and field.notes else '' }}</textarea>
+    </label>
+
+    <div class="actions">
+      <button type="submit">{{ 'Save changes' if field else 'Create field' }}</button>
+      <a class="cancel" href="{{ ('/field/' ~ field.id) if field else '/' }}{% if details %}?details=true{% endif %}">Cancel</a>
+    </div>
+  </form>
+</section>
+
+{% if not crops %}
+  <div class="banner warn">
+    <strong>No models built.</strong>
+    <span>Run <code>python scripts/build_models.py</code> — the crop list comes from
+      the built models, so it is empty until then.</span>
+  </div>
+{% endif %}
+{% endblock %}

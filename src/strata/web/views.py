@@ -39,7 +39,8 @@ def index(request: Request, details: bool = False):
 
 
 @router.get("/field/{field_id}", response_class=HTMLResponse)
-def field_view(request: Request, field_id: int, details: bool = False):
+def field_view(request: Request, field_id: int, details: bool = False,
+               error: Optional[str] = None):
     conn = db.init_db()
     field = db.get_field(conn, field_id)
     if field is None:
@@ -61,6 +62,9 @@ def field_view(request: Request, field_id: int, details: bool = False):
         "channel_meta": CHANNELS,
         "prediction": prediction,
         "recommendations": recommendations_for(field, lab, prediction),
+        # Site creation redirects back here, so a validation failure has to be
+        # able to surface on this page rather than vanishing.
+        "error": error,
     })
     return templates.TemplateResponse(request, "field.html", ctx)
 

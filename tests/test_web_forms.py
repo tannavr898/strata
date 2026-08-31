@@ -295,3 +295,73 @@ def test_site_page_honours_an_explicit_channel(client):
     site_id = _rows(client, "SELECT id FROM site ORDER BY id")[0]["id"]
     page = visible_text(client.get(f"/field/1/site/{site_id}?channel=soil_temp").text)
     assert "DS18B20" in page
+
+
+# --------------------------------------------------------------------------- #
+# Field and site management
+# --------------------------------------------------------------------------- #
+def test_create_a_field_from_the_ui(client):
+    r = client.post("/fields/new", data={
+        "name": "South Forty", "county_ansi": "029",
+        "crop": "soybean_yield", "acres": "38"}, follow_redirects=False)
+    assert r.status_code == 303
+    names = {f["name"] for f in _rows(client, "SELECT name FROM field")}
+    assert "South Forty" in names
+
+
+def test_field_county_is_validated_against_real_counties(client):
+    """An unrecognised county would produce a field with no soil or weather data
+    behind it, which surfaces later as a puzzling empty state instead of an error
+    at the point of entry."""
+    r = client.post("/fields/new", data={
+        "name": "Nowhere", "county_ansi": "999", "crop": "soybean_yield"},
+        follow_redirects=True)
+    assert "Pennsylvania county" in visible_text(r.text)
+    assert len(_rows(client, "SELECT * FROM field")) == 1, "invalid field was created"
+
+
+def test_field_crop_is_validated_against_built_models(client):
+    r = client.post("/fields/new", data={
+        "name": "Rye Patch", "county_ansi": "029", "crop": "rye_yield"},
+        follow_redirects=True)
+    assert "not a crop Strata models" in visible_text(r.text)
+
+
+def test_withheld_crops_are_still_offered_when_adding_a_field(client):
+    """Someone who grows oats must be able to add their oat field and see the
+    honest 'we can't forecast this' answer, plus the fertilizer advice that does
+    not depend on a yield model at all. Hiding the crop would be the wrong
+    kindness -- it would look like Strata does not know what oats are."""
+    page = visible_text(client.get("/fields/new").text)
+    assert "oats" in page
+
+
+def test_edit_a_field(client):
+    client.post("/field/1/edit", data={
+        "name": "North Field (renamed)", "county_ansi": "029",
+        "crop": "corn_grain_yield", "acres": "44"})
+    field = _rows(client, "SELECT * FROM field WHERE id = 1")[0]
+    assert field["name"] == "North Field (renamed)"
+    assert field["acres"] == 44.0
+
+
+def test_add_a_site_with_coordinates(client):
+    client.post("/field/1/sites", data={
+        "label": "Upper bench", "lat": "39.964", "lon": "-75.63"})
+    site = _rows(client, "SELECT * FROM site")[0]
+    assert site["label"] == "Upper bench"
+    assert site["lat"] == pytest.approx(39.964)
+
+
+def test_a_site_may_omit_coordinates(client):
+    """Someone adding spots at the kitchen table does not have them yet, and
+    refusing over a missing lat/lon just sends them back to a spreadsheet."""
+    client.post("/field/1/sites", data={"label": "Back corner"})
+    site = _rows(client, "SELECT * FROM site")[0]
+    assert site["lat"] is None
+
+
+def test_site_validation_error_surfaces_on_the_field_page(client):
+    r = client.post("/field/1/sites", data={"label": ""}, follow_redirects=True)
+    assert "Give the spot a name" in visible_text(r.text)
+    assert not _rows(client, "SELECT * FROM site")

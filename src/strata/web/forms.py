@@ -303,3 +303,59 @@ def parse_pairs(text: str) -> tuple[list[float], list[float]]:
             f"meaningless R²."
         )
     return probe, lab
+
+
+# --------------------------------------------------------------------------- #
+# Fields and sites
+# --------------------------------------------------------------------------- #
+def parse_field(form, valid_counties: dict[str, str],
+                valid_crops: Iterable[str]) -> dict:
+    """Validate a new or edited field.
+
+    `county_ansi` and `crop` are checked against what actually exists rather than
+    trusted from the form, because both are lookup keys: an unrecognised county
+    would silently produce a field with no soil or weather data behind it, and an
+    unrecognised crop would produce one with no model. Both would render as a
+    puzzling empty state later instead of an error here.
+    """
+    name = clean_text(form.get("name"), 120)
+    if not name:
+        raise ValidationError("Give the field a name.")
+
+    county = str(form.get("county_ansi") or "").strip()
+    if county not in valid_counties:
+        raise ValidationError(
+            "Choose a Pennsylvania county. Strata's soil and weather data is "
+            "county-level, so a field needs one to sit in."
+        )
+
+    crop = str(form.get("crop") or "").strip()
+    if crop not in set(valid_crops):
+        raise ValidationError(f"{crop or 'No crop'} is not a crop Strata models.")
+
+    return {
+        "name": name,
+        "county_ansi": county,
+        "county_name": valid_counties[county],
+        "crop": crop,
+        "acres": optional_float(form.get("acres"), "Acres", 0.0, 100000.0),
+        "notes": clean_text(form.get("notes")),
+    }
+
+
+def parse_site(form) -> dict:
+    """Validate a new site within a field.
+
+    Coordinates are optional. A farmer adding a spot from the kitchen table does
+    not have them yet, and refusing the site over a missing lat/lon would just
+    push them back to the spreadsheet.
+    """
+    label = clean_text(form.get("label"), 120)
+    if not label:
+        raise ValidationError("Give the spot a name, e.g. 'Upper bench'.")
+    return {
+        "label": label,
+        "lat": optional_float(form.get("lat"), "Latitude", -90.0, 90.0),
+        "lon": optional_float(form.get("lon"), "Longitude", -180.0, 180.0),
+        "notes": clean_text(form.get("notes")),
+    }

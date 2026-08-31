@@ -220,3 +220,47 @@ def sparkline(points: list[dict], width: int = 640, height: int = 180) -> dict:
                  for (x, y), v in zip(coords, values)],
         "lo": lo, "hi": hi, "width": width, "height": height,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Reference data for the field form
+# --------------------------------------------------------------------------- #
+def pa_counties() -> dict[str, str]:
+    """{county_ansi: 'Chester'} for every PA county Strata has soil data for.
+
+    Read from the SSURGO table rather than hardcoded, so the dropdown can only
+    ever offer counties the pipeline can actually back with data. Cached: it is
+    67 rows that change only when the data is re-pulled.
+    """
+    cached = STATE.get("counties")
+    if cached is not None:
+        return cached
+
+    import pandas as pd
+
+    path = Path(__file__).resolve().parents[3] / "data" / "processed" / "ssurgo_pa_soil.csv"
+    if not path.exists():
+        STATE["counties"] = {}
+        return {}
+    df = pd.read_csv(path, dtype={"county_ansi": "string"})
+    counties = {
+        str(r.county_ansi): str(r.areaname).split(" County")[0]
+        for r in df.itertuples()
+    }
+    STATE["counties"] = dict(sorted(counties.items(), key=lambda kv: kv[1]))
+    return STATE["counties"]
+
+
+def modelled_crops() -> list[str]:
+    """Crops with a built model, best skill first.
+
+    Every built crop is offered, including the ones the gate withholds. Hiding
+    them would be the wrong kindness: someone who grows oats should be able to
+    add their oat field and see the honest "we can't forecast this" answer, along
+    with the fertilizer advice that does not depend on a yield model at all.
+    """
+    artifacts = STATE["artifacts"]
+    if artifacts is None:
+        return []
+    return sorted(artifacts.forecasts,
+                  key=lambda c: artifacts.forecasts[c].forecast_r2, reverse=True)

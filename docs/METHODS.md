@@ -1190,6 +1190,16 @@ manufacture one. A new fit applies only to readings with no calibrated value:
 re-deriving values a farmer may already have acted on, with no record that they
 changed, is worse than leaving an older fit in place.
 
+**Field and site entry.** Fields are created through the UI rather than a seed
+script. `county_ansi` and `crop` are validated against what actually exists — the
+county list is read from the SSURGO table, the crop list from the built model
+manifest — because both are lookup keys: an unrecognised county would produce a
+field with no public data behind it, and an unrecognised crop one with no model.
+Both would surface later as a puzzling empty state rather than an error at entry.
+Crops the gate *withholds* are still offered, deliberately: a grower of oats must
+be able to register their field and receive the honest "no estimate" answer along
+with the fertilizer advice, which does not depend on a yield model at all.
+
 **Known limitation.** The `calibration` table is not scoped to a device, so a fit
 applies to every reading of that channel. With one prototype probe this is
 correct — a calibration belongs to the sensor, not the field. A second device with
@@ -1385,8 +1395,8 @@ population with no `county_ansi`, dropped one step earlier — never conflate th
 ### 13.1 Executable invariants
 
 Documented rigor that nothing enforces decays silently. As of 2026-08-31 the
-invariants this document asserts are also a pytest suite (`python -m pytest`, 50
-tests, ~2s), so a regression fails loudly instead of quietly changing the numbers:
+invariants this document asserts are also a pytest suite (`python -m pytest`, 95
+tests, ~80s), so a regression fails loudly instead of quietly changing the numbers:
 
 | file | encodes |
 |---|---|
