@@ -10,6 +10,31 @@ history (`git log`).
 
 ---
 
+## 2026-10-05: Commit and push the working tree for the move to the laptop
+
+**Prompt.** "im moving operations for this app from here to my laptop for testing. can you commit and push everything so my laptop can have the latest code and give me all the stuff in gitignored so that my laptop can get that too?"
+
+**Files changed.** None edited. This entry records a repository-level change:
+the 47 modified and untracked files in the working tree were committed as
+`0d1ec10` on a new branch, `app-shell-map-season`, and pushed to `origin`.
+`main` is untouched at `7f3d9c1`.
+
+**What happened.**
+
+- `python -m pytest` passed before the commit.
+- Nothing gitignored was staged (`.env`, `data/`, hook scratch state).
+- The gitignored files a second machine needs (`.env`, `data/strata.db`,
+  `data/models/`, `data/processed/`, the two hook scratch files) were zipped to
+  the Desktop as `strata-ignored-files.zip`, outside the repository. `.venv/`
+  and the caches were left out; they are rebuilt per machine.
+
+**On the laptop.** Clone, `git switch app-shell-map-season`, unzip the bundle
+into the repo root, then follow the setup steps in `README.md`.
+
+No metric moved.
+
+---
+
 ## 2026-10-03: Field map, deletion, model rebuild — and barley crossing the gate
 
 **Prompt.** "finsih out the rest of the app and thhen we can go over it"
