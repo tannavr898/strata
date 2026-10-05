@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ site.label }} — {{ field.name }}{% endblock %}
+{% block heading %}{{ site.label }}{% endblock %}
 
 {% block content %}
 <p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
-<h1>{{ site.label }}</h1>
 <p class="sub">
   {% if site.notes %}{{ site.notes }}{% endif %}
   {% if site.lat %}&middot; {{ "%.4f"|format(site.lat) }}, {{ "%.4f"|format(site.lon) }}{% endif %}

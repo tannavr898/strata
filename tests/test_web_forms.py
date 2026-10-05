@@ -365,3 +365,105 @@ def test_site_validation_error_surfaces_on_the_field_page(client):
     r = client.post("/field/1/sites", data={"label": ""}, follow_redirects=True)
     assert "Give the spot a name" in visible_text(r.text)
     assert not _rows(client, "SELECT * FROM site")
+
+
+# --------------------------------------------------------------------------- #
+# Deletion
+#
+# These are the paths that destroy data, so the assertions are mostly about
+# what must SURVIVE: a scoped delete that takes more than it was asked for is
+# far worse than one that fails.
+# --------------------------------------------------------------------------- #
+def test_deleting_one_channel_leaves_the_others(client):
+    client.post("/field/1/import", data={"csv_text": WIDE})
+    assert len(_rows(client, "SELECT * FROM reading")) == 4
+
+    client.post("/field/1/readings/delete", data={"channel": "soil_temp"})
+    left = _rows(client, "SELECT * FROM reading")
+    assert len(left) == 2
+    assert {r["channel"] for r in left} == {"soil_moisture"}
+
+
+def test_deleting_one_day_leaves_the_others(client):
+    client.post("/field/1/import", data={
+        "csv_text": "site,taken_at,channel,raw_value\n"
+                    "A,2026-06-01,soil_moisture,20\n"
+                    "A,2026-06-08,soil_moisture,21\n"})
+    client.post("/field/1/readings/delete", data={"day": "2026-06-01"})
+    left = _rows(client, "SELECT * FROM reading")
+    assert len(left) == 1
+    assert left[0]["taken_at"].startswith("2026-06-08")
+
+
+def test_a_scoped_delete_never_touches_another_field(client):
+    """The SQL joins through `site` to scope by field. A missing clause there
+    would silently delete another field's season."""
+    client.post("/fields/new", data={"name": "Other", "county_ansi": "029",
+                                     "crop": "soybean_yield"})
+    other = [f for f in _rows(client, "SELECT * FROM field") if f["name"] == "Other"][0]
+    client.post("/field/1/import", data={"csv_text": WIDE})
+    client.post(f"/field/{other['id']}/import", data={"csv_text": WIDE})
+    assert len(_rows(client, "SELECT * FROM reading")) == 8
+
+    client.post("/field/1/readings/delete", data={})
+    survivors = _rows(client, "SELECT * FROM reading")
+    assert len(survivors) == 4, "a scoped delete crossed into another field"
+
+
+def test_deleting_a_site_takes_its_readings_with_it(client):
+    """A reading whose spot is gone has no location, and an unlocatable
+    measurement is not worth keeping."""
+    client.post("/field/1/import", data={"csv_text": WIDE})
+    site = _rows(client, "SELECT * FROM site ORDER BY id")[0]
+    other_count = len(_rows(client, "SELECT * FROM reading WHERE site_id != ?",
+                            (site["id"],)))
+
+    client.post(f"/field/1/site/{site['id']}/delete")
+    assert not _rows(client, "SELECT * FROM site WHERE id = ?", (site["id"],))
+    assert len(_rows(client, "SELECT * FROM reading")) == other_count
+
+
+def test_deleting_a_soil_test_restores_the_refusal(client):
+    """Removing the only soil test must put the engine back to 'obtain a soil
+    test', not leave the last advice cached on the page."""
+    client.post("/field/1/soil-test", data={
+        "sampled_at": "2026-04-12", "ph": "5.72", "buffer_ph": "6.50",
+        "mehlich3_p_ppm": "22", "mehlich3_k_ppm": "85"})
+    assert "lb P2O5" in visible_text(client.get("/field/1").text)
+
+    test_id = _rows(client, "SELECT * FROM lab_test")[0]["id"]
+    client.post(f"/field/1/soil-test/{test_id}/delete")
+    page = visible_text(client.get("/field/1").text)
+    assert "No soil test on file" in page
+    assert "lb P2O5" not in page
+
+
+def test_deleting_a_field_requires_its_name_typed_back(client):
+    r = client.post("/field/1/delete", data={"confirm": "wrong"},
+                    follow_redirects=True)
+    assert "Type the field name exactly" in visible_text(r.text)
+    assert _rows(client, "SELECT * FROM field WHERE id = 1"), "field deleted without confirmation"
+
+
+def test_deleting_a_field_removes_everything_under_it(client):
+    client.post("/field/1/import", data={"csv_text": WIDE})
+    client.post("/field/1/soil-test", data={"sampled_at": "2026-04-12", "ph": "6.1"})
+
+    client.post("/field/1/delete", data={"confirm": "North Field"})
+    assert not _rows(client, "SELECT * FROM field WHERE id = 1")
+    assert not _rows(client, "SELECT * FROM site WHERE field_id = 1")
+    assert not _rows(client, "SELECT * FROM lab_test WHERE field_id = 1")
+    assert not _rows(client, "SELECT * FROM reading"), "orphaned readings survived"
+
+
+def test_deleting_something_that_does_not_exist_is_a_404(client):
+    assert client.post("/field/1/soil-test/999/delete").status_code == 404
+    assert client.post("/field/1/site/999/delete").status_code == 404
+
+
+def test_deletes_are_not_reachable_by_get(client):
+    """A GET that destroys data can be triggered by a crawler, a prefetch, or a
+    pasted link."""
+    for url in ["/field/1/delete", "/field/1/readings/delete",
+                "/field/1/site/1/delete"]:
+        assert client.get(url).status_code in (404, 405), f"{url} responds to GET"

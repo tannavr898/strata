@@ -1,0 +1,30 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/save_prompt.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/check_docs.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

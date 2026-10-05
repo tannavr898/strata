@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Overview — Strata{% endblock %}
+{% block heading %}Overview{% endblock %}
+{% block topmeta %}
+  {% if cards %}{{ cards|length }} field{{ '' if cards|length == 1 else 's' }}{% endif %}
+{% endblock %}
+
+{% block content %}
+
+{% if not cards %}
+  <section class="card empty">
+    <h2>No fields yet</h2>
+    <p class="give">Add a field to see its soil status, yield estimate and readings.</p>
+    <div class="cardlinks">
+      <a class="cardlink primary" href="/fields/new{% if details %}?details=true{% endif %}">Add a field</a>
+    </div>
+    <p class="give">Or run <code>python scripts/seed_db.py</code> for two demo fields.</p>
+  </section>
+
+{% else %}
+
+  {# ── Needs attention ─────────────────────────────────────────────────── #}
+  {% if alerts %}
+    <section class="attention">
+      <h2>Needs attention</h2>
+      <ul class="alerts">
+        {% for a in alerts %}
+          <li class="alert tone-{{ a.tone }}">
+            <div class="alert-body">
+              <p class="alert-title">{{ a.title }}</p>
+              <p class="alert-detail">{{ a.detail }}</p>
+            </div>
+            {% if a.href %}
+              <a class="alert-action" href="{{ a.href }}{% if details %}?details=true{% endif %}">{{ a.action }}</a>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <section class="attention">
+      <h2>Needs attention</h2>
+      <p class="give">Nothing outstanding. Every measured value is at or above its
+        Penn State optimum, and nothing is unmeasured.</p>
+    </section>
+  {% endif %}
+
+  {# ── Field summary ───────────────────────────────────────────────────── #}
+  <h2 class="sectionhead">Fields</h2>
+  <div class="fieldgrid">
+    {% for c in cards %}
+      {% set f = c.field %}
+      {% set s = c.status %}
+      <a class="fieldcard state-{{ s.state }}"
+         href="/field/{{ f.id }}{% if details %}?details=true{% endif %}">
+
+        <div class="fc-head">
+          <span class="fc-name">{{ f.name }}</span>
+          <span class="fc-meta">{{ f.county_name }} &middot; {{ f.crop|crop }}{% if f.acres %} &middot; {{ f.acres }} ac{% endif %}</span>
+        </div>
+
+        {# Soil: cited findings only. Never a composite score. #}
+        <div class="fc-soil">
+          <p class="fc-label">Soil</p>
+          {% if s.state == 'unmeasured' %}
+            <p class="fc-headline unknown">{{ s.headline }}</p>
+            <p class="fc-sub">Strata can't assess this field without a lab test.</p>
+          {% else %}
+            <div class="chips">
+              {% for chip in s.chips %}
+                <span class="chip tone-{{ chip.tone }}" title="{{ chip.category }} — {{ chip.label }} ({{ chip.citation }})">
+                  <span class="chip-key">{{ chip.key }}</span>
+                  <span class="chip-val">{{ chip.value }}</span>
+                </span>
+              {% endfor %}
+            </div>
+            <p class="fc-headline {{ 'warn' if s.needs_attention else 'good' }}">{{ s.headline }}</p>
+            {% if s.context %}
+              <p class="fc-sub">
+                {% for label, value in s.context %}{{ label }} {{ value }}{% if not loop.last %} &middot; {% endif %}{% endfor %}
+                <span class="norule">no rule</span>
+              </p>
+            {% endif %}
+          {% endif %}
+        </div>
+
+        {# Yield: the gate's answer, whatever it is. #}
+        <div class="fc-yield">
+          <p class="fc-label">Expected yield</p>
+          {% if c.prediction.state == 'ok' %}
+            <p class="fc-figure">{{ "%.0f"|format(c.prediction.value) }}
+              <span class="fc-unit">{{ c.prediction.unit }}</span></p>
+            <p class="fc-sub">&plusmn;{{ "%.1f"|format(c.prediction.mae) }} &middot; county-scale</p>
+          {% elif c.prediction.state == 'withheld' %}
+            <p class="fc-headline warn">No estimate</p>
+            <p class="fc-sub">Model not reliable enough for this crop</p>
+          {% else %}
+            <p class="fc-headline unknown">Unavailable</p>
+          {% endif %}
+        </div>
+
+        <div class="fc-foot">
+          {% if c.n_readings %}
+            {{ c.n_readings }} reading{{ '' if c.n_readings == 1 else 's' }} ·
+            {{ c.n_sites }} spot{{ '' if c.n_sites == 1 else 's' }}
+            {% if c.last_reading %} · last {{ c.last_reading[:10] }}{% endif %}
+          {% else %}
+            <span class="muted">No probe readings</span>
+          {% endif %}
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+
+  <div class="cardlinks">
+    <a class="cardlink" href="/fields/new{% if details %}?details=true{% endif %}">Add a field</a>
+  </div>
+
+  {% if details %}
+    <div class="dev">
+      Soil status is a roll-up of cited findings only — pH, Mehlich-3 P and
+      Mehlich-3 K, the three measures <code>recommender.CITATIONS</code> covers.
+      CEC and organic matter are shown as context because no citation interprets
+      them. There is deliberately no composite score.
+    </div>
+  {% endif %}
+
+{% endif %}
+{% endblock %}

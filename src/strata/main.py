@@ -7,12 +7,12 @@ calls) and prints a single human-readable report tying the pieces together:
     2. Yield regression      — how well does soil+weather predict county yield,
                                honestly (leave-counties-out), vs a baseline?
     3. Recommendation        — apply cited Penn State rules to a real field.
-    4. Calibration seam       — where a future cheap probe would plug in.
+    4. Calibration seam       — where the team's soil probe plugs in.
 
 Each section delegates to the module that owns the logic; main.py only sequences
 them and formats the report. It reads the deterministic CSVs in data/processed/
 (reproducible from the README provenance), so it does not need a network or API
-key. Run:  python -m strata.main
+key. Run:  PYTHONPATH=src python -m strata.main
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import warnings
 import numpy as np
 
 from strata.calibration import ProbeCalibration
+from strata.metrics_log import append_run
 from strata.recommender import OptimizationEngine, soiltest_from_ssurgo, _print_report
 from strata.soil_classifier import SoilClassifier
 from strata.yield_model import YieldModel
@@ -36,7 +37,7 @@ def _rule(title: str) -> None:
     print("=" * 72)
 
 
-def section_soil_classifier() -> None:
+def section_soil_classifier() -> dict:
     _rule("1. SOIL CLASSIFICATION  (is soil identity recoverable from numbers?)")
     from sklearn.dummy import DummyClassifier
     from sklearn.model_selection import train_test_split
@@ -55,6 +56,8 @@ def section_soil_classifier() -> None:
     print(f"  majority baseline  : {base:.3f}")
     print("  -> soil order is recoverable from measurable lab numbers (well above "
           "baseline),\n     which is the premise the product rests on.")
+    return {"accuracy": cv["accuracy_mean"], "f1_macro": cv["f1_macro_mean"],
+            "baseline": base, "n_pedons": len(y)}
 
 
 def section_yield_model() -> dict:
@@ -108,7 +111,10 @@ def section_yield_model() -> dict:
           "\n     years (negative R^2). Adding it ~doubles accuracy and is what a farmer"
           "\n     planning next season actually needs. Both reported; nothing hidden.")
 
-    return {"crop": headline, "lco_r2": fc_lco["r2_mean"], "forward_r2": fwd["r2"]}
+    return {"crop": headline, "lco_r2": fc_lco["r2_mean"], "forward_r2": fwd["r2"],
+            "attrib_lco_r2": attrib_lco["r2_mean"], "lco_mae": fc_lco["mae_mean"],
+            "forward_mae": fwd["mae"], "forward_r2_no_trend": fwd_naive["r2"],
+            "baseline_mae": base_mae}
 
 
 _GATE_CROPS = ["corn_grain_yield", "soybean_yield", "oats_yield", "alfalfa_hay_yield"]
@@ -172,9 +178,10 @@ def section_recommender(skills: dict) -> None:
 
 
 def section_calibration() -> None:
-    _rule("4. CALIBRATION SEAM  (where a future cheap probe plugs in)")
-    print("\nNo probe hardware exists; Strata depends on none. This shows the "
-          "contract only,\nfit on SYNTHETIC pairs (labeled, never a finding): a "
+    _rule("4. CALIBRATION SEAM  (where the soil probe plugs in)")
+    print("\nStrata depends on no hardware. No real paired probe/lab samples exist "
+          "yet, so this shows\nthe contract only, fit on SYNTHETIC pairs (labeled, "
+          "never a finding): a "
           "raw probe reading is mapped\nonto the lab scale, then fed to the same "
           "recommender unchanged.")
     rng = np.random.default_rng(_SEED)
@@ -205,7 +212,7 @@ def main() -> None:
     print("#  (runs offline on data/processed/*.csv; reproducible per README)")
     print("#" * 72)
 
-    section_soil_classifier()
+    soil_metrics = section_soil_classifier()
     yield_metrics = section_yield_model()
     skills = _product_skills()
     section_product_gate(skills)
@@ -220,8 +227,17 @@ def main() -> None:
           f"{yield_metrics['lco_r2']:.2f} leave-counties-out, "
           f"{yield_metrics['forward_r2']:.2f} forward-in-time), with")
     print("the conservative soil+weather-only attribution reported alongside it;")
-    print("recommendations are cited Penn State rules, not invented; and a cheap probe")
-    print("can plug in later as calibration only.")
+    print("recommendations are cited Penn State rules, not invented; and the soil probe")
+    print("plugs in through calibration only.")
+
+    # Record this run's headline numbers so docs/metrics.jsonl tracks them over time.
+    append_run("main", {
+        "soil_classifier": {k: round(float(v), 4) for k, v in soil_metrics.items()},
+        "yield_headline": {k: (v if isinstance(v, str) else round(float(v), 4))
+                           for k, v in yield_metrics.items()},
+        "gate": {c: {"lco_r2": round(pf.forecast_r2, 4), "shipped": pf.shipped}
+                 for c, pf in skills.items()},
+    })
 
 
 if __name__ == "__main__":  # pragma: no cover

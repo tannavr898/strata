@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Soil test — {{ field.name }}{% endblock %}
+{% block heading %}Soil test{% endblock %}
 
 {% block content %}
 <p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
-<h1>Add a soil test</h1>
 <p class="sub">{{ field.name }} &middot; {{ field.county_name }} County</p>
 
 {% if error %}

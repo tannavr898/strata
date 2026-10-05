@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Models — Strata{% endblock %}
+{% block heading %}Models{% endblock %}
 
 {% block content %}
-<h1>Model card</h1>
 <p class="sub">
   Every crop Strata evaluated, and whether it is trustworthy enough to show.
 </p>
@@ -45,7 +45,7 @@
   <h2>Why some crops are withheld</h2>
   {% for f in forecasts if not f.shipped %}
     <p class="give"><strong>{{ f.crop|crop }}</strong>
-      &mdash; {{ f.message|crop }}</p>
+      &mdash; {{ f.message|crop|tidy }}</p>
   {% else %}
     <p class="give">Every evaluated crop currently clears the gate.</p>
   {% endfor %}

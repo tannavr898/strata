@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Import readings — {{ field.name }}{% endblock %}
+{% block heading %}Import readings{% endblock %}
 
 {% block content %}
 <p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
-<h1>Import readings</h1>
 <p class="sub">{{ field.name }} &middot; {{ field.county_name }} County</p>
 
 {% if error %}
@@ -70,6 +70,39 @@ Upper bench,2026-06-15 09:30,22.4,18.1,1450</div>
       <button type="submit">Import</button>
       <a class="cancel" href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">Cancel</a>
     </div>
+  </form>
+</section>
+
+{% if removed is defined and removed %}
+  <div class="formok">Removed {{ removed }} reading{{ '' if removed == '1' else 's' }}.</div>
+{% endif %}
+
+<section class="card danger">
+  <h2>Undo an import</h2>
+  <p class="give">
+    Imported the wrong file? Remove readings by measurement, by the day they were
+    taken, or both. This cannot be undone — but re-importing the file restores
+    them exactly, because import is idempotent.
+  </p>
+  <form method="post" class="form"
+        action="/field/{{ field.id }}/readings/delete{% if details %}?details=true{% endif %}">
+    <div class="row">
+      <label><span>Measurement</span>
+        <select name="channel">
+          <option value="">Any</option>
+          {% for name in channels %}<option value="{{ name }}">{{ name|replace('_',' ') }}</option>{% endfor %}
+        </select></label>
+      <label><span>Taken on</span>
+        <input type="date" name="day"></label>
+      <label><span>Added by</span>
+        <select name="source">
+          <option value="">Any</option>
+          <option value="import">import</option>
+          <option value="synthetic">synthetic (demo)</option>
+          <option value="device">device</option>
+        </select></label>
+    </div>
+    <div class="actions"><button type="submit" class="destructive">Remove readings</button></div>
   </form>
 </section>
 

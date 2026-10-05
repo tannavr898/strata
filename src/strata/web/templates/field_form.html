@@ -1,13 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Edit ' + field.name if field else 'New field' }} — Strata{% endblock %}
+{% block heading %}{{ 'Edit field' if field else 'New field' }}{% endblock %}
 
 {% block content %}
 {% if field %}
   <p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
-  <h1>Edit field</h1>
 {% else %}
   <p class="crumb"><a href="/{% if details %}?details=true{% endif %}">&larr; Fields</a></p>
-  <h1>Add a field</h1>
 {% endif %}
 
 {% if error %}<div class="formerror">{{ error }}</div>{% endif %}
@@ -69,6 +68,27 @@
     </div>
   </form>
 </section>
+
+{% if field %}
+  <section class="card danger">
+    <h2>Delete this field</h2>
+    <p class="give">
+      Removes <strong>{{ field.name }}</strong> along with every spot, reading and
+      soil test on it. This cannot be undone. Type the field's name to confirm.
+    </p>
+    <form method="post" class="form"
+          action="/field/{{ field.id }}/delete{% if details %}?details=true{% endif %}">
+      <div class="row">
+        <label><span>Field name</span>
+          <input type="text" name="confirm" placeholder="{{ field.name }}"
+                 autocomplete="off" required></label>
+      </div>
+      <div class="actions">
+        <button type="submit" class="destructive">Delete {{ field.name }}</button>
+      </div>
+    </form>
+  </section>
+{% endif %}
 
 {% if not crops %}
   <div class="banner warn">

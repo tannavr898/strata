@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from strata.artifacts import BUILD_CROPS, MODEL_DIR, build  # noqa: E402
+from strata.metrics_log import append_run  # noqa: E402
 from strata.yield_model import YieldModel  # noqa: E402
 
 
@@ -51,6 +52,20 @@ def main(argv: list[str]) -> int:
     print(f"\nGate: LCO forecast R^2 >= {YieldModel.PRODUCT_MIN_FORECAST_R2:.2f}")
     print(f"{len(shipped)} of {len(crops)} crops ship: {', '.join(shipped)}")
     print(f"\nArtifacts written to {MODEL_DIR}")
+
+    # One line in docs/metrics.jsonl per build, so the technical report can plot
+    # each crop's honest skill against the change that produced it.
+    append_run("build_models", {
+        "table_hash": artifacts.manifest.table_hash,
+        "table_rows": artifacts.manifest.table_rows,
+        "gate_threshold": artifacts.manifest.gate_threshold,
+        "crops": {c: {"lco_r2": round(f.forecast_r2, 4),
+                      "lco_mae": round(f.forecast_mae, 4),
+                      "unit": f.unit, "shipped": f.shipped,
+                      "n_rows": f.n_rows, "n_counties": f.n_counties}
+                  for c, f in artifacts.forecasts.items() if c in crops},
+    })
+    print("Metrics appended to docs/metrics.jsonl")
     return 0
 
 

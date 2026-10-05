@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}Season — {{ field.name }}{% endblock %}
+{% block heading %}{{ field.name }} · season{% endblock %}
+{% block topmeta %}{% if year %}{{ year }}{% endif %}{% endblock %}
+
+{% block content %}
+<p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
+
+{% if not channels %}
+  <section class="card">
+    <p class="give">No readings yet for this field.</p>
+    <div class="cardlinks">
+      <a class="cardlink primary" href="/field/{{ field.id }}/import{% if details %}?details=true{% endif %}">Import readings</a>
+    </div>
+  </section>
+
+{% else %}
+
+  {# ── controls ────────────────────────────────────────────────────────── #}
+  <div class="controls">
+    <nav class="chips">
+      {% for c in channels %}
+        <a class="chip-link {% if c == channel %}on{% endif %}"
+           href="/field/{{ field.id }}/season?channel={{ c }}{% if year %}&year={{ year }}{% endif %}{% if details %}&details=true{% endif %}">
+          {{ c|replace('_',' ') }}
+        </a>
+      {% endfor %}
+    </nav>
+    {% if years|length > 1 %}
+      <nav class="chips">
+        {% for y in years %}
+          <a class="chip-link {% if y == year %}on{% endif %}"
+             href="/field/{{ field.id }}/season?channel={{ channel }}&year={{ y }}{% if details %}&details=true{% endif %}">{{ y }}</a>
+        {% endfor %}
+      </nav>
+    {% endif %}
+  </div>
+
+  <section class="card">
+    <div class="charthead">
+      <div>
+        <h2>{{ channel|replace('_',' ')|capitalize }}{% if channel_meta %}
+          <span class="chartunit">{{ channel_meta.units }}</span>{% endif %}</h2>
+        <p class="give">
+          {% if chart.n_points %}
+            {{ chart.n_points }} readings across {{ chart.series|length }}
+            spot{{ '' if chart.series|length == 1 else 's' }}.
+          {% endif %}
+          {% if channel_meta and not channel_meta.lab_scale %}
+            No laboratory equivalent for this measurement, so this is a trend over
+            time rather than a lab-comparable value, and it never feeds a
+            fertilizer recommendation.
+          {% endif %}
+        </p>
+      </div>
+      <div class="tags">
+        {% if any_synthetic %}<span class="tag synthetic">synthetic data</span>{% endif %}
+        {% if any_uncalibrated %}<span class="tag uncal">uncalibrated</span>{% endif %}
+      </div>
+    </div>
+
+    {% if chart.empty %}
+      <p class="give">Not enough readings in {{ year }} to plot this measurement.</p>
+    {% else %}
+
+      {# Legend: always present for 2+ series, so identity is never colour alone. #}
+      {% if chart.series|length > 1 %}
+        <ul class="legend">
+          {% for s in chart.series %}
+            <li><span class="swatch" style="--c: light-dark({{ s.light }}, {{ s.dark }})"></span>{{ s.label }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      <svg class="seasonchart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
+           role="img"
+           aria-label="{{ channel|replace('_',' ') }} at each spot across the {{ year }} season">
+
+        {# Phenology windows: the yield model's OWN sub-season feature windows,
+           drawn behind the data so the grower and the model share a calendar. #}
+        {% for b in chart.bands %}
+          <rect class="band band-{{ b.name }}" x="{{ b.x }}" y="18"
+                width="{{ b.width }}" height="{{ chart.height - 18 - chart.pad_b }}"/>
+          <text class="bandlabel" x="{{ b.x + 4 }}" y="14">{{ b.label }}</text>
+        {% endfor %}
+
+        {# y grid + labels #}
+        {% for y, label in chart.y_ticks %}
+          <line class="grid" x1="{{ chart.pad_l }}" y1="{{ y }}"
+                x2="{{ chart.width - 86 }}" y2="{{ y }}"/>
+          <text class="axis-y" x="{{ chart.pad_l - 8 }}" y="{{ y + 3.5 }}">{{ label }}</text>
+        {% endfor %}
+
+        {# x labels #}
+        {% for x, label in chart.x_ticks %}
+          <text class="axis-x" x="{{ x }}" y="{{ chart.height - 12 }}">{{ label }}</text>
+        {% endfor %}
+
+        {# series #}
+        {% for s in chart.series %}
+          <g class="series s{{ s.slot }}" style="--c: light-dark({{ s.light }}, {{ s.dark }})">
+            <path class="line" d="{{ s.path }}" fill="none"/>
+            {% for p in s.points %}
+              <circle class="dot {% if p.uncalibrated %}raw{% endif %}"
+                      cx="{{ p.x }}" cy="{{ p.y }}" r="4">
+                <title>{{ s.label }} · {{ p.when }} · {{ "%.2f"|format(p.value) }}{% if channel_meta %} {{ channel_meta.units }}{% endif %}{% if p.uncalibrated %} (raw){% endif %}</title>
+              </circle>
+            {% endfor %}
+            {# Direct labels: required, not decorative. The categorical palette
+               fails the 3:1 contrast check in light mode, which obliges visible
+               labels and a table view rather than colour-only identity. #}
+            {% if s.last %}
+              <text class="serieslabel" x="{{ s.last.x + 9 }}" y="{{ s.last.y + 4 }}">{{ s.label }}</text>
+            {% endif %}
+          </g>
+        {% endfor %}
+      </svg>
+
+      {% if chart.overflow %}
+        <p class="give">Not plotted: {{ chart.overflow|join(', ') }} — more spots
+          than the palette has distinct colours. Split the field to compare them.</p>
+      {% endif %}
+
+      <p class="give hint">
+        Shaded bands are the growing-season windows the yield model itself uses.
+        <strong>Silking</strong> is the one the corn model leans on hardest — a dry
+        or hot July is what decides the year.
+      </p>
+    {% endif %}
+  </section>
+
+  {# A table view is obligatory alongside this palette, not a nicety. #}
+  <details class="card tableview">
+    <summary>All {{ rows|length }} readings</summary>
+    <table class="grid">
+      <thead><tr><th>Spot</th><th>Taken</th><th>Raw</th><th>Calibrated</th><th>Source</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+          <tr>
+            <td>{{ r.site_label }}</td>
+            <td>{{ r.taken_at|replace('T',' ') }}</td>
+            <td>{{ r.raw_value }}</td>
+            <td>{% if r.calibrated_value is none %}<span class="muted">—</span>{% else %}{{ "%.2f"|format(r.calibrated_value) }}{% endif %}</td>
+            <td>{{ r.source }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+
+  {% if details and channel_meta %}
+    <div class="dev">{{ channel_meta.sensor }} · {{ channel_meta.units }} ·
+      lab scale: {{ channel_meta.lab_scale or "none" }} ·
+      destination: {{ channel_meta.destination }}</div>
+  {% endif %}
+
+{% endif %}
+{% endblock %}

@@ -180,7 +180,7 @@ It never sees county names. It only sees the thirteen numbers.
 
 Give it Chester's soil and 2023's weather, and it predicts **179 bu/acre**. The
 actual was 175.4, so it was about 4 bushels high — well inside its typical honest
-error of ~13.6 bu/acre (leave-counties-out).
+error of ~13.5 bu/acre (leave-counties-out).
 
 ### Step 7 — The prediction becomes advice
 
@@ -308,12 +308,12 @@ It's recognizing a fingerprint, not doing science.
 Hold out **entire counties**. Train on 53 counties, test on 13 the model has never
 seen — then rotate.
 
-**Score: R² = 0.60.**
+**Score: R² = 0.61.**
 
 This is the real question: *a new farm walks in from a county we never trained on —
 can we predict its yield?* No fingerprint to memorize.
 
-**The 0.69 → 0.60 drop is exactly the memorization we just described**, measured.
+**The 0.69 → 0.61 drop is exactly the memorization we just described**, measured.
 
 ### Test 3 — Forward in time (hardest, most realistic)
 
@@ -328,7 +328,7 @@ features in §6.)
 
 ### The punchline
 
-The same model is "0.69 good," "0.60 good," or "0.46 good" depending purely on how
+The same model is "0.69 good," "0.61 good," or "0.46 good" depending purely on how
 you test it. Papers that report only the first number aren't lying, but they're
 answering an easier question than the one that matters.
 
@@ -517,10 +517,10 @@ know, go test" is the correct answer, and the system is built to give it.
 
 The same logic gates the yield forecast: crops whose honest score falls below 0.30
 are **withheld** entirely, with a message explaining that a forecast would be no
-better than quoting the county average. Currently **withheld**: oats (0.17), alfalfa
-(0.25), and barley (0.28). The crops that **clear** the gate are corn grain (0.60),
-soybeans (0.58), corn silage (0.55), hay (0.41), and — newly, after the time-varying
-features lifted it over the bar — winter wheat (0.32).
+better than quoting the county average. In the current build (see
+`data/models/MANIFEST.json`) the **withheld** crops are oats (0.14) and alfalfa
+(0.27). The crops that **clear** the gate are corn grain (0.61), soybeans (0.59),
+corn silage (0.55), hay (0.49), barley (0.39), and winter wheat (0.31).
 
 ---
 
@@ -553,8 +553,9 @@ just repackaged weather. A probe is the one thing that measures the **actual wat
 the actual field** — independent of the weather everything else is built from. That's
 the specific, remaining signal it would contribute.
 
-**Honesty note:** no probe exists yet. The demo runs on clearly-labeled fake data
-just to prove the interface works. Fake results are never reported as findings.
+**Honesty note:** the team has built the probe, but no real probe-vs-lab sample
+pairs have been collected yet. Until they are, the demo runs on clearly-labeled fake
+data just to prove the interface works. Fake results are never reported as findings.
 
 ---
 
@@ -616,8 +617,8 @@ which is the root of the ceiling in §6.
 ## Where to go next
 
 - **Want the formal writeup?** → `METHODS.md`
-- **Want to see it run?** → `python -m strata.main`
-- **Want the charts?** → `python -m strata.report`, then open
+- **Want to see it run?** → `PYTHONPATH=src python -m strata.main`
+- **Want the charts?** → `PYTHONPATH=src python -m strata.report`, then open
   `data/processed/strata_dashboard.png`
 - **Want to read code?** → start with `assemble.py`; it's the shortest and shows
   how the pieces connect.

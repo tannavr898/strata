@@ -32,6 +32,9 @@
   --red:       #9a3324;
   --red-bg:    #f9e6e2;
 
+  /* Required for light-dark() in the series colours. */
+  color-scheme: light dark;
+
   --radius: 10px;
   --shadow: 0 1px 2px rgba(28, 33, 24, .06), 0 4px 14px rgba(28, 33, 24, .05);
 }
@@ -63,43 +66,103 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
-/* ── chrome ──────────────────────────────────────────────────────────── */
-.topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 1rem; flex-wrap: wrap;
-  padding: .85rem clamp(1rem, 4vw, 2rem);
+/* ── app shell: sidebar + main, hamburger under 900px ────────────────── */
+.shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 232px; flex: 0 0 232px;
   background: var(--surface);
-  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh;
+}
+.sidebar-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1.1rem 1.1rem .4rem;
 }
 .brand {
-  font-weight: 700; font-size: 1.15rem; letter-spacing: -.01em;
+  font-weight: 700; font-size: 1.12rem; letter-spacing: -.02em;
   color: var(--ink); text-decoration: none;
 }
-.topbar nav { display: flex; gap: 1rem; align-items: center; }
-.topbar nav a { color: var(--ink-soft); text-decoration: none; font-size: .92rem; }
-.topbar nav a:hover { color: var(--ink); }
+.sidebar nav { padding: .6rem .7rem; flex: 1; overflow-y: auto; }
+.navgroup {
+  margin: .9rem .4rem .35rem; font-size: .68rem; font-weight: 700;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint);
+}
+.navlink {
+  display: block; padding: .42rem .55rem; margin-bottom: .1rem;
+  border-radius: 7px; text-decoration: none;
+  color: var(--ink-soft); font-size: .92rem; font-weight: 500;
+}
+.navlink:hover { background: var(--bg); color: var(--ink); }
+.navlink.on { background: var(--green-bg); color: var(--green); font-weight: 650; }
+
+.sidebar-foot { padding: .8rem 1.1rem 1.1rem; border-top: 1px solid var(--line); }
+.buildstamp { margin: .5rem 0 0; font-size: .72rem; color: var(--ink-faint);
+              line-height: 1.45; }
 .toggle {
-  padding: .2rem .6rem; border: 1px solid var(--line);
-  border-radius: 999px; font-variant-numeric: tabular-nums;
+  display: inline-block; padding: .2rem .6rem; border: 1px solid var(--line);
+  border-radius: 999px; font-size: .78rem; color: var(--ink-soft);
+  text-decoration: none;
 }
 .toggle.on { background: var(--slate-bg); color: var(--slate); border-color: transparent; }
 
-main { max-width: 760px; margin: 0 auto; padding: clamp(1rem, 4vw, 2rem); }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.topbar {
+  display: flex; align-items: center; gap: .9rem;
+  padding: .9rem clamp(1rem, 3vw, 2rem);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  position: sticky; top: 0; z-index: 5;
+}
+.pagetitle { font-size: 1.05rem; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+.topbar-meta { margin-left: auto; color: var(--ink-faint); font-size: .85rem; }
+
+/* Hamburger. A checkbox drives it, so the whole thing works with no JavaScript. */
+.navtoggle { position: absolute; opacity: 0; pointer-events: none; }
+.navopen, .navclose { display: none; cursor: pointer; }
+.navopen span {
+  display: block; width: 18px; height: 2px; margin: 3.5px 0;
+  background: var(--ink-soft); border-radius: 2px;
+}
+.navclose { font-size: 1.5rem; line-height: 1; color: var(--ink-faint); padding: 0 .2rem; }
+.scrim { display: none; }
+
+main { flex: 1; width: 100%; max-width: 1100px;
+       padding: clamp(1rem, 3vw, 2rem); }
 
 footer {
-  max-width: 760px; margin: 0 auto;
-  padding: 1.5rem clamp(1rem, 4vw, 2rem) 3rem;
-  color: var(--ink-faint); font-size: .82rem;
-  border-top: 1px solid var(--line);
+  max-width: 1100px; padding: 1.5rem clamp(1rem, 3vw, 2rem) 3rem;
+  color: var(--ink-faint); font-size: .8rem;
+  border-top: 1px solid var(--line); margin-top: 1rem;
 }
 footer p { margin: .35rem 0; }
 
 .banner {
-  padding: .7rem clamp(1rem, 4vw, 2rem);
+  padding: .7rem clamp(1rem, 3vw, 2rem);
   font-size: .9rem; display: flex; gap: .5rem; flex-wrap: wrap;
 }
 .banner.error { background: var(--red-bg);   color: var(--red); }
 .banner.warn  { background: var(--amber-bg); color: var(--amber); }
+
+@media (max-width: 900px) {
+  /* The sidebar becomes a drawer. The research ("Lab") items stay reachable but
+     the farmer items are what you land on -- a phone is a field device, and the
+     lab work is a desk activity. */
+  .sidebar {
+    position: fixed; z-index: 20; top: 0; left: 0; height: 100vh;
+    transform: translateX(-100%); transition: transform .18s ease;
+    box-shadow: var(--shadow);
+  }
+  .navtoggle:checked ~ .shell .sidebar { transform: none; }
+  .navtoggle:checked ~ .shell .scrim {
+    display: block; position: fixed; inset: 0; z-index: 15;
+    background: rgba(10, 14, 10, .35);
+  }
+  .navopen, .navclose { display: block; }
+  main, footer { max-width: none; }
+}
 
 /* ── type ────────────────────────────────────────────────────────────── */
 h1 { font-size: 1.7rem; margin: .2rem 0 .1rem; letter-spacing: -.02em; }
@@ -174,7 +237,8 @@ h2 { font-size: 1.02rem; margin: 0 0 .8rem; letter-spacing: .01em;
 .rec-action   { margin: .25rem 0; color: var(--ink-soft); font-size: .93rem; }
 .rec-amount {
   margin: .5rem 0 .2rem; padding: .5rem .7rem;
-  background: var(--green-bg); color: var(--green);
+  background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-left: 3px solid var(--ink-faint);
   border-radius: 8px; font-weight: 600; font-size: .93rem;
 }
 .rec-unknown .rec-amount { background: var(--amber-bg); color: var(--amber); }
@@ -318,3 +382,229 @@ code {
 .addsite[open] > summary { margin-bottom: .3rem; }
 .editlink { color: var(--ink-faint); text-decoration: underline; }
 .editlink:hover { color: var(--green); }
+
+/* ── overview: attention list ────────────────────────────────────────── */
+.attention { margin-bottom: 1.6rem; }
+.attention h2, .sectionhead {
+  font-size: .72rem; font-weight: 700; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--ink-faint);
+  margin: 0 0 .7rem;
+}
+.sectionhead { margin-top: 1.8rem; }
+
+.alerts { list-style: none; margin: 0; padding: 0;
+          display: flex; flex-direction: column; gap: .5rem; }
+.alert {
+  display: flex; align-items: center; gap: 1rem;
+  background: var(--surface); border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius); padding: .75rem .9rem;
+}
+/* The honesty colours again, so an alert reads the same as the chip it came from. */
+.alert.tone-env     { border-left-color: var(--red); }
+.alert.tone-low     { border-left-color: var(--amber); }
+.alert.tone-unknown { border-left-color: var(--amber); }
+.alert.tone-slate   { border-left-color: var(--slate); }
+
+.alert-body { flex: 1; min-width: 0; }
+.alert-title  { margin: 0; font-weight: 650; font-size: .93rem; }
+.alert-detail { margin: .18rem 0 0; color: var(--ink-soft); font-size: .86rem; }
+.alert-action {
+  flex: none; font-size: .85rem; font-weight: 600; text-decoration: none;
+  color: var(--green); padding: .35rem .7rem;
+  border: 1px solid var(--line); border-radius: 7px; white-space: nowrap;
+}
+.alert-action:hover { border-color: var(--green); }
+
+@media (max-width: 620px) {
+  /* `flex: none` + `white-space: nowrap` meant the action could not shrink, so
+     on a narrow screen it overflowed the card and was clipped. Stack instead. */
+  .alert { flex-direction: column; align-items: flex-start; gap: .6rem; }
+  .alert-action { align-self: stretch; text-align: center; }
+}
+
+/* ── overview: field cards ───────────────────────────────────────────── */
+.fieldgrid {
+  display: grid; gap: .9rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.fieldcard {
+  display: flex; flex-direction: column; gap: .85rem;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 1.05rem; text-decoration: none; color: var(--ink);
+}
+.fieldcard:hover { border-color: var(--green); }
+/* An unmeasured field is not a healthy field. It gets amber, not neutral. */
+.fieldcard.state-unmeasured { border-left: 3px solid var(--amber); }
+.fieldcard.state-attention  { border-left: 3px solid var(--amber); }
+.fieldcard.state-partial    { border-left: 3px solid var(--slate); }
+.fieldcard.state-ok         { border-left: 3px solid var(--green); }
+
+.fc-head { display: flex; flex-direction: column; gap: .1rem; }
+.fc-name { font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em; }
+.fc-meta { font-size: .82rem; color: var(--ink-faint); }
+
+.fc-label {
+  margin: 0 0 .3rem; font-size: .68rem; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint);
+}
+.fc-headline { margin: .35rem 0 0; font-size: .88rem; font-weight: 600; }
+.fc-headline.good    { color: var(--green); }
+.fc-headline.warn    { color: var(--amber); }
+.fc-headline.unknown { color: var(--amber); }
+.fc-sub { margin: .2rem 0 0; font-size: .8rem; color: var(--ink-faint); }
+
+.fc-figure {
+  margin: 0; font-size: 2rem; font-weight: 700; line-height: 1;
+  letter-spacing: -.025em; color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+.fc-unit { font-size: .4em; font-weight: 600; color: var(--ink-soft);
+           letter-spacing: 0; }
+.fc-yield { margin-top: auto; }
+.fc-foot {
+  padding-top: .6rem; border-top: 1px solid var(--line);
+  font-size: .78rem; color: var(--ink-faint);
+}
+
+/* Cited-finding chips. Each one traces to a Penn State rule via its title. */
+.chips { display: flex; gap: .35rem; flex-wrap: wrap; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: .3rem;
+  padding: .2rem .5rem; border-radius: 7px;
+  font-size: .82rem; font-variant-numeric: tabular-nums;
+}
+.chip-key { font-weight: 700; font-size: .75rem; opacity: .8; }
+.chip-val { font-weight: 600; }
+.chip.tone-good    { background: var(--green-bg);  color: var(--green); }
+.chip.tone-mid     { background: var(--green-bg);  color: var(--green); }
+.chip.tone-low     { background: var(--amber-bg);  color: var(--amber); }
+.chip.tone-env     { background: var(--red-bg);    color: var(--red); }
+.chip.tone-unknown { background: var(--slate-bg);  color: var(--slate); }
+
+/* CEC and organic matter have no citation, so they are visibly outside the
+   judgement rather than quietly folded into it. */
+.norule {
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-faint); border: 1px solid var(--line);
+  padding: 0 .3rem; border-radius: 4px; margin-left: .3rem;
+}
+
+.card.empty { text-align: left; }
+
+/* ── season chart ────────────────────────────────────────────────────── */
+.controls { display: flex; gap: 1.2rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.chip-link {
+  padding: .3rem .7rem; border-radius: 999px; font-size: .85rem;
+  text-decoration: none; color: var(--ink-soft);
+  background: var(--surface); border: 1px solid var(--line);
+}
+.chip-link.on { background: var(--green); color: var(--surface); border-color: transparent; }
+
+.charthead { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap;
+             margin-bottom: .9rem; }
+.charthead h2 { margin: 0 0 .2rem; text-transform: none; letter-spacing: -.01em;
+                font-size: 1.05rem; color: var(--ink); }
+.chartunit { font-size: .78rem; font-weight: 500; color: var(--ink-faint);
+             margin-left: .4rem; }
+.charthead .tags { margin: 0; }
+
+.legend {
+  display: flex; gap: 1rem; flex-wrap: wrap;
+  list-style: none; margin: 0 0 .5rem; padding: 0;
+  font-size: .84rem; color: var(--ink-soft);
+}
+.legend li { display: flex; align-items: center; gap: .4rem; }
+/* The swatch carries identity; the text stays ink, never the series colour. */
+.swatch { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
+
+.seasonchart { width: 100%; height: auto; display: block; overflow: visible; }
+
+/* Phenology bands sit behind everything and must never compete with the data. */
+.band { fill: var(--ink); opacity: .035; }
+.band-jul { opacity: .07; }           /* silking: the window that decides corn */
+.bandlabel {
+  font-size: 9px; fill: var(--ink-faint); letter-spacing: .04em;
+  text-transform: uppercase; font-weight: 600;
+}
+.grid { stroke: var(--line); stroke-width: 1; }
+.axis-y { font-size: 10px; fill: var(--ink-faint); text-anchor: end;
+          font-variant-numeric: tabular-nums; }
+.axis-x { font-size: 10px; fill: var(--ink-faint); text-anchor: middle; }
+
+.series .line { stroke: var(--c); stroke-width: 2; stroke-linejoin: round;
+                stroke-linecap: round; }
+/* A 2px surface ring keeps overlapping markers separable where lines cross. */
+.series .dot { fill: var(--c); stroke: var(--surface); stroke-width: 2; }
+/* An uncalibrated point is hollow: visibly a raw sensor number, not a
+   lab-equivalent one, without needing a second colour. */
+.series .dot.raw { fill: var(--surface); stroke: var(--c); }
+.serieslabel { font-size: 11px; font-weight: 650; fill: var(--ink); }
+
+@media (prefers-color-scheme: dark) {
+  /* Series colours are NOT switched here: an inline style attribute outranks a
+     media query, so this block could never override them. The template emits
+     light-dark() per series instead and the browser resolves it. */
+  .band { fill: #fff; opacity: .05; }
+  .band-jul { opacity: .09; }
+}
+
+.tableview summary {
+  cursor: pointer; font-size: .9rem; font-weight: 600; color: var(--ink-soft);
+}
+.tableview[open] summary { margin-bottom: .8rem; }
+
+/* ── field map ───────────────────────────────────────────────────────── */
+.fieldmap { width: 100%; max-width: 560px; height: auto; display: block;
+            margin: .4rem auto 0; }
+.mapsite circle { stroke: var(--surface); stroke-width: 2; }
+/* A spot with no reading for this channel is hollow, not the lightest step of
+   the ramp: "not measured here" is not "lowest value here". */
+.mapsite circle.nodata { stroke: var(--ink-faint); stroke-dasharray: 3 3; }
+.maplabel { font-size: 11px; fill: var(--ink); text-anchor: middle; font-weight: 600; }
+/* The value sits on the marker, so it is legible against both ends of the ramp
+   without the text taking a series colour. */
+.mapvalue { font-size: 11px; fill: #fff; text-anchor: middle; font-weight: 700;
+            paint-order: stroke; stroke: rgba(0,0,0,.35); stroke-width: 2.5px; }
+.compass path { fill: var(--ink-faint); }
+.compass text { font-size: 10px; fill: var(--ink-faint); text-anchor: middle;
+                font-weight: 700; }
+.scalebar line { stroke: var(--ink-faint); stroke-width: 1.5; }
+.scalebar text { font-size: 10px; fill: var(--ink-faint); text-anchor: middle; }
+
+.ramp { display: flex; align-items: center; gap: .5rem; margin: .8rem auto 0;
+        max-width: 560px; font-size: .78rem; color: var(--ink-faint);
+        font-variant-numeric: tabular-nums; }
+.ramp-bar {
+  flex: 1; height: 8px; border-radius: 4px;
+  background: linear-gradient(to right, #cde2fb, #9ec5f4, #6da7ec,
+                              #3987e5, #2a78d6, #1c5cab, #104281);
+}
+.ramp-unit { color: var(--ink-faint); }
+
+/* ── destructive actions ─────────────────────────────────────────────── */
+/* Red is reserved: elsewhere it means an environmental concern, here an action
+   that removes data. Both are "stop and read this", which is the shared meaning. */
+.card.danger { border-left: 3px solid var(--red); }
+.card.danger h2 { color: var(--red); }
+
+.form button.destructive { background: var(--red); color: var(--surface); }
+.form button.destructive:hover { filter: brightness(1.08); }
+
+.inlineform { display: inline; }
+.linkbtn {
+  font: inherit; font-size: .82rem; font-weight: 600;
+  background: none; border: none; padding: .2rem .3rem;
+  color: var(--ink-faint); cursor: pointer; text-decoration: underline;
+}
+.linkbtn.destructive { color: var(--red); }
+.linkbtn:hover { filter: brightness(1.15); }
+
+/* The site tile became a container once it gained a Remove control, so the link
+   and the button need to sit side by side without the button inheriting the
+   tile's link styling. */
+.site { display: flex; align-items: flex-start; gap: .5rem; }
+.site-main { display: flex; flex-direction: column; gap: .15rem;
+             text-decoration: none; color: var(--ink); flex: 1; min-width: 0; }
+.site .linkbtn { flex: none; }

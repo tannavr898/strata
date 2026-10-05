@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ field.name }} — Strata{% endblock %}
+{% block heading %}{{ field.name }}{% endblock %}
 
 {% block content %}
-<h1>{{ field.name }}</h1>
 <p class="sub">
   {{ field.county_name }} County &middot; {{ field.crop|crop }}
   {% if field.acres %}&middot; {{ field.acres }} acres{% endif %}
@@ -45,7 +45,7 @@
       average &mdash; so a number here would look precise without being trustworthy.
     </p>
     {% if details %}
-      <div class="dev">{{ p.message }}</div>
+      <div class="dev">{{ p.message|tidy }}</div>
     {% endif %}
 
   {% elif p.state == 'no_county_data' %}
@@ -112,6 +112,11 @@
     <div class="cardlinks">
       <a class="cardlink"
          href="/field/{{ field.id }}/soil-test{% if details %}?details=true{% endif %}">Add a newer soil test</a>
+      <form method="post" class="inlineform"
+            action="/field/{{ field.id }}/soil-test/{{ lab.id }}/delete{% if details %}?details=true{% endif %}">
+        <button type="submit" class="linkbtn destructive"
+                title="Delete this soil test">Delete this test</button>
+      </form>
     </div>
   {% endif %}
 </section>
@@ -164,11 +169,18 @@
   {% if sites %}
     <div class="sites">
       {% for s in sites %}
-        <a class="site" href="/field/{{ field.id }}/site/{{ s.id }}{% if details %}?details=true{% endif %}">
-          <span class="site-label">{{ s.label }}</span>
-          {% if s.notes %}<span class="site-note">{{ s.notes }}</span>{% endif %}
-          {% if s.lat %}<span class="site-geo">{{ "%.4f"|format(s.lat) }}, {{ "%.4f"|format(s.lon) }}</span>{% endif %}
-        </a>
+        <div class="site">
+          <a class="site-main" href="/field/{{ field.id }}/site/{{ s.id }}{% if details %}?details=true{% endif %}">
+            <span class="site-label">{{ s.label }}</span>
+            {% if s.notes %}<span class="site-note">{{ s.notes }}</span>{% endif %}
+            {% if s.lat %}<span class="site-geo">{{ "%.4f"|format(s.lat) }}, {{ "%.4f"|format(s.lon) }}</span>{% endif %}
+          </a>
+          <form method="post" class="inlineform"
+                action="/field/{{ field.id }}/site/{{ s.id }}/delete{% if details %}?details=true{% endif %}">
+            <button type="submit" class="linkbtn destructive"
+                    title="Remove this spot and its readings">Remove</button>
+          </form>
+        </div>
       {% endfor %}
     </div>
   {% endif %}
@@ -194,6 +206,10 @@
 
   {% if channels %}
     <div class="cardlinks">
+      <a class="cardlink primary"
+         href="/field/{{ field.id }}/season{% if details %}?details=true{% endif %}">Season view</a>
+      <a class="cardlink"
+         href="/field/{{ field.id }}/map{% if details %}?details=true{% endif %}">Map</a>
       <a class="cardlink"
          href="/field/{{ field.id }}/import{% if details %}?details=true{% endif %}">Import more readings</a>
       <a class="cardlink" href="/calibration{% if details %}?details=true{% endif %}">Calibration</a>

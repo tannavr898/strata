@@ -87,6 +87,9 @@ class Manifest:
     gate_threshold: float
     crops: list[str]
     strata_features: list[str]
+    # Defaulted so manifests written before this field stay loadable.
+    sklearn_version: str = "unknown"
+
 
 
 class Artifacts:
@@ -118,7 +121,36 @@ class Artifacts:
         }
         logger.info("Loaded %d models built %s (table %s)",
                     len(models), manifest.built_at, manifest.table_hash)
+
+        # The same discipline as the stale-table check, on a second axis.
+        # scikit-learn does not guarantee that a pipeline pickled by one version
+        # behaves identically when unpickled by another -- it warns that results
+        # may be invalid. Serving predictions from a mismatched build without
+        # saying so would be exactly the kind of silent number this project
+        # refuses elsewhere, so it is surfaced rather than left in a warning
+        # nobody reads.
+        import sklearn
+
+        if (manifest.sklearn_version not in ("unknown", sklearn.__version__)):
+            logger.warning(
+                "Models were built with scikit-learn %s but %s is installed. "
+                "Predictions may differ from the recorded metrics; rebuild with "
+                "`python scripts/build_models.py` to be certain.",
+                manifest.sklearn_version, sklearn.__version__,
+            )
         return cls(manifest, forecasts, models)
+
+    def library_mismatch(self) -> Optional[str]:
+        """The scikit-learn version gap, if these models were built under another.
+
+        None when it matches, or when the manifest predates this field.
+        """
+        import sklearn
+
+        built = self.manifest.sklearn_version
+        if built in ("unknown", sklearn.__version__):
+            return None
+        return f"built with scikit-learn {built}, running {sklearn.__version__}"
 
     def is_stale(self, table_path: Path = _TABLE) -> bool:
         """True if the analysis table changed since these artifacts were built."""
@@ -222,7 +254,10 @@ def build(crops: Optional[list[str]] = None, model_dir: Path = MODEL_DIR,
                     crop, forecast.forecast_r2, forecast.forecast_mae,
                     forecast.unit, verdict)
 
+    import sklearn
+
     manifest = Manifest(
+        sklearn_version=sklearn.__version__,
         built_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         table_hash=_table_hash(),
         table_rows=len(table),

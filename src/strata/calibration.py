@@ -31,9 +31,10 @@ the first input that can speak to the within-county, year-to-year variance the
 static SSURGO layer structurally cannot. That — not merely finer spatial resolution
 — is why this seam is where genuinely new predictive signal would enter.
 
-HONESTY: there is no probe and no real probe data yet
------------------------------------------------------
-No hardware exists, so there is NO real (probe, lab) dataset to fit. The demo
+HONESTY: there is no real paired probe data yet
+-----------------------------------------------
+The probe hardware now exists (see `probe.CHANNELS`), but no paired (probe, lab)
+samples have been collected, so there is NO real calibration dataset to fit. The demo
 below fits the calibration on a clearly-labeled SYNTHETIC paired sample (a known
 gain/offset/noise applied to real lab values) purely to exercise the interface.
 Per the project rule, synthetic output is labeled as such and is NEVER reported as
@@ -148,7 +149,7 @@ if __name__ == "__main__":  # pragma: no cover
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     print("#" * 72)
-    print("# SYNTHETIC calibration demo. No probe hardware or probe data exists.")
+    print("# SYNTHETIC calibration demo. No real paired probe/lab data exists yet.")
     print("# These pairs are fabricated to exercise the interface, NOT a result.")
     print("#" * 72)
 

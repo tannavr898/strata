@@ -55,6 +55,17 @@ def client(tmp_path, monkeypatch):
                VALUES (?, ?, 'soil_moisture', ?, 'synthetic')""",
             [(site, f"2026-05-{d:02d}T09:00:00", 20.0 + d * 0.4) for d in (4, 11, 18, 25)],
         )
+        # A second spot, so the season view is tested with more than one series:
+        # legend, distinct colour slots and direct labels only exist above one.
+        swale = conn.execute(
+            "INSERT INTO site (field_id, label, lat, lon) VALUES (?,'Low swale',39.96,-75.62)",
+            (corn,),
+        ).lastrowid
+        conn.executemany(
+            """INSERT INTO reading (site_id, taken_at, channel, raw_value, source)
+               VALUES (?, ?, 'soil_moisture', ?, 'synthetic')""",
+            [(swale, f"2026-05-{d:02d}T09:15:00", 27.0 + d * 0.3) for d in (4, 11, 18, 25)],
+        )
         # No lab test on this one, and oats is below the product gate.
         conn.execute(
             """INSERT INTO field (name, county_ansi, county_name, crop, acres)
@@ -172,5 +183,50 @@ def test_provenance_footer_names_the_build(client):
     """Every page says which models produced it and when, so a stale build is
     visible rather than silently trusted."""
     page = visible_text(client.get("/field/1").text)
-    assert "Models built" in page
+    # The build stamp now appears twice: compactly in the sidebar foot, and in
+    # full in the page footer. Both must name the build, so a stale one is
+    # visible wherever you happen to be looking.
     assert "gate" in page.lower()
+    assert "county-year rows" in page, "the footer no longer names the training data"
+    assert "table " in page, "the footer no longer names the analysis table hash"
+
+
+# --------------------------------------------------------------------------- #
+# Season view
+# --------------------------------------------------------------------------- #
+def test_season_view_renders_with_a_legend_and_a_table(client):
+    """The categorical series palette fails the 3:1 contrast check in light mode,
+    which obliges both visible labels and a table view — identity can never rest
+    on colour alone."""
+    r = client.get("/field/1/season")
+    assert r.status_code == 200
+    assert 'class="legend"' in r.text, "no legend above a single series"
+    assert "serieslabel" in r.text, "series are not directly labelled"
+    assert 'class="card tableview"' in r.text, "no table view beside the chart"
+
+
+def test_season_view_draws_the_models_own_phenology_windows(client):
+    """The bands are the yield model's sub-season feature windows, so the grower
+    and the model are visibly reading the same calendar."""
+    markup = client.get("/field/1/season").text
+    for band in ("Establishment", "Vegetative", "Silking", "Grain fill"):
+        assert f">{band}</text>" in markup, f"the {band} window is not drawn"
+    assert 'class="band band-jul"' in markup, "the silking window is not distinguished"
+
+
+def test_season_view_marks_synthetic_and_uncalibrated(client):
+    page = visible_text(client.get("/field/1/season").text)
+    assert "synthetic data" in page
+    assert "uncalibrated" in page
+
+
+def test_season_view_falls_back_for_an_unknown_channel(client):
+    r = client.get("/field/1/season?channel=not_a_channel")
+    assert r.status_code == 200
+    assert "Not enough readings" not in visible_text(r.text)
+
+
+def test_season_view_on_a_field_with_no_readings(client):
+    r = client.get("/field/2/season")
+    assert r.status_code == 200
+    assert "No readings yet" in visible_text(r.text)

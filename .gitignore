@@ -29,3 +29,8 @@ data/models/
 
 # App database (a running instance's own data, not source).
 data/strata.db
+
+# Documentation hooks: per-turn scratch state (see .claude/hooks/).
+.claude/last_prompt.txt
+.claude/hooks/.turn_state.json
+.claude/hooks/__pycache__/

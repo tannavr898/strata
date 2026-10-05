@@ -7,49 +7,91 @@
   <link rel="stylesheet" href="/static/strata.css">
 </head>
 <body>
-<header class="topbar">
-  <a class="brand" href="/">Strata</a>
-  <nav>
-    <a href="/">Fields</a>
-    <a href="/models">Models</a>
-    <a href="/calibration">Calibration</a>
-    {% if details %}
-      <a class="toggle on" href="?details=false">Details: on</a>
-    {% else %}
-      <a class="toggle" href="?details=true">Details: off</a>
+
+<!-- The nav toggle is a checkbox, not JavaScript: the sidebar collapses to a
+     hamburger on a phone with no script at all, so the app keeps working on a
+     bad connection in a field. -->
+<input type="checkbox" id="navtoggle" class="navtoggle" hidden>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <a class="brand" href="/">Strata</a>
+      <label for="navtoggle" class="navclose" aria-label="Close menu">&times;</label>
+    </div>
+
+    <nav>
+      <p class="navgroup">Farm</p>
+      <a class="navlink {% if nav == 'overview' %}on{% endif %}" href="/">Overview</a>
+      <a class="navlink {% if nav == 'fields' %}on{% endif %}" href="/fields">Fields</a>
+
+      <p class="navgroup">Lab</p>
+      <a class="navlink {% if nav == 'calibration' %}on{% endif %}" href="/calibration">Calibration</a>
+      <a class="navlink {% if nav == 'models' %}on{% endif %}" href="/models">Models</a>
+    </nav>
+
+    <div class="sidebar-foot">
+      {% if details %}
+        <a class="toggle on" href="?details=false">Details on</a>
+      {% else %}
+        <a class="toggle" href="?details=true">Details off</a>
+      {% endif %}
+      {% if manifest %}
+        <p class="buildstamp">
+          Models {{ manifest.built_at[:10] }} ·
+          gate R&sup2; &ge; {{ "%.2f"|format(manifest.gate_threshold) }}
+        </p>
+      {% endif %}
+    </div>
+  </aside>
+
+  <label for="navtoggle" class="scrim" aria-hidden="true"></label>
+
+  <div class="main">
+    <header class="topbar">
+      <label for="navtoggle" class="navopen" aria-label="Open menu">
+        <span></span><span></span><span></span>
+      </label>
+      <h1 class="pagetitle">{% block heading %}{% endblock %}</h1>
+      <div class="topbar-meta">{% block topmeta %}{% endblock %}</div>
+    </header>
+
+    {% if startup_error %}
+      <div class="banner error">
+        <strong>No models built.</strong> <span>{{ startup_error }}</span>
+      </div>
+    {% elif stale %}
+      <div class="banner warn">
+        <strong>Models are stale.</strong>
+        <span>The analysis table changed since these were built. Re-run
+          <code>python scripts/build_models.py</code>.</span>
+      </div>
+    {% elif library_mismatch %}
+      <div class="banner warn">
+        <strong>Models were built by a different scikit-learn.</strong>
+        <span>{{ library_mismatch }} — predictions may differ from the recorded
+          metrics. Re-run <code>python scripts/build_models.py</code> to be sure.</span>
+      </div>
     {% endif %}
-  </nav>
-</header>
 
-{% if startup_error %}
-  <div class="banner error">
-    <strong>No models built.</strong>
-    <span>{{ startup_error }}</span>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+      {% if manifest %}
+        <p>
+          Built {{ manifest.built_at[:10] }} from
+          {{ "{:,}".format(manifest.table_rows) }} county-year rows
+          (table <code>{{ manifest.table_hash }}</code>), seed {{ manifest.seed }}.
+        </p>
+      {% endif %}
+      <p class="muted">
+        County-scale public data. Recommendations cite Penn State AASL rules and must
+        be confirmed against your current AASL report before field use.
+      </p>
+    </footer>
   </div>
-{% elif stale %}
-  <div class="banner warn">
-    <strong>Models are stale.</strong>
-    <span>The analysis table changed since these models were built.
-      Re-run <code>python scripts/build_models.py</code>.</span>
-  </div>
-{% endif %}
-
-<main>
-  {% block content %}{% endblock %}
-</main>
-
-<footer>
-  {% if manifest %}
-    <p>
-      Models built {{ manifest.built_at[:10] }} from {{ "{:,}".format(manifest.table_rows) }}
-      county-year rows (table <code>{{ manifest.table_hash }}</code>),
-      gate R&sup2; &ge; {{ "%.2f"|format(manifest.gate_threshold) }}, seed {{ manifest.seed }}.
-    </p>
-  {% endif %}
-  <p class="muted">
-    County-scale public data. Recommendations cite Penn State AASL rules and must be
-    confirmed against your current AASL report before field use.
-  </p>
-</footer>
+</div>
 </body>
 </html>

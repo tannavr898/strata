@@ -337,3 +337,126 @@ async def site_create(request: Request, field_id: int, details: bool = False):
         )
     conn.close()
     return _back(f"/field/{field_id}", details)
+
+
+# --------------------------------------------------------------------------- #
+# Deletion
+#
+# Every write path above could create data; none could remove it, so a mistyped
+# soil test or an import of the wrong file was permanent without opening SQLite.
+# Each delete below is a POST (never a GET, which a browser or a crawler may
+# follow on its own), names exactly what it will remove, and reports the count
+# afterwards so a surprising number is visible rather than silent.
+# --------------------------------------------------------------------------- #
+@router.post("/field/{field_id}/readings/delete")
+async def readings_delete(request: Request, field_id: int, details: bool = False):
+    """Remove an import batch: one channel, or everything imported on one day.
+
+    Scoped rather than "delete all readings", because the realistic mistake is
+    one bad file, and recovering from an over-broad undo means re-importing
+    everything.
+    """
+    form = await request.form()
+    channel = str(form.get("channel") or "").strip() or None
+    day = str(form.get("day") or "").strip() or None
+    source = str(form.get("source") or "").strip() or None
+
+    conn = db.init_db()
+    if db.get_field(conn, field_id) is None:
+        conn.close()
+        return not_found(request, details, f"No field with id {field_id}.")
+
+    sql = """DELETE FROM reading
+              WHERE site_id IN (SELECT id FROM site WHERE field_id = ?)"""
+    params: list = [field_id]
+    if channel:
+        sql += " AND channel = ?"
+        params.append(channel)
+    if day:
+        sql += " AND substr(taken_at, 1, 10) = ?"
+        params.append(day)
+    if source:
+        sql += " AND source = ?"
+        params.append(source)
+
+    with conn:
+        removed = conn.execute(sql, params).rowcount
+    conn.close()
+    logger.info("Deleted %d readings from field %d (channel=%s day=%s source=%s)",
+                removed, field_id, channel, day, source)
+    return _back(f"/field/{field_id}/import", details, removed=removed)
+
+
+@router.post("/field/{field_id}/soil-test/{test_id}/delete")
+async def soil_test_delete(request: Request, field_id: int, test_id: int,
+                           details: bool = False):
+    conn = db.init_db()
+    with conn:
+        removed = conn.execute(
+            "DELETE FROM lab_test WHERE id = ? AND field_id = ?",
+            (test_id, field_id),
+        ).rowcount
+    conn.close()
+    if not removed:
+        return not_found(request, details, "No such soil test on this field.")
+    logger.info("Deleted soil test %d from field %d", test_id, field_id)
+    return _back(f"/field/{field_id}", details)
+
+
+@router.post("/field/{field_id}/site/{site_id}/delete")
+async def site_delete(request: Request, field_id: int, site_id: int,
+                      details: bool = False):
+    """Remove a spot and its readings.
+
+    The readings go with it by `ON DELETE CASCADE`: a reading with no spot has no
+    location, and an unlocatable measurement is not worth keeping. The count is
+    reported first so the scale of the delete is visible.
+    """
+    conn = db.init_db()
+    site = conn.execute(
+        "SELECT * FROM site WHERE id = ? AND field_id = ?", (site_id, field_id)
+    ).fetchone()
+    if site is None:
+        conn.close()
+        return not_found(request, details, "No such spot on this field.")
+    n = conn.execute("SELECT COUNT(*) FROM reading WHERE site_id = ?",
+                     (site_id,)).fetchone()[0]
+    with conn:
+        conn.execute("DELETE FROM site WHERE id = ?", (site_id,))
+    conn.close()
+    logger.info("Deleted site %d (%s) and %d readings", site_id, site["label"], n)
+    return _back(f"/field/{field_id}", details,
+                 removed=f"{site['label']} and {n} readings")
+
+
+@router.post("/field/{field_id}/delete")
+async def field_delete(request: Request, field_id: int, details: bool = False):
+    """Remove a field, its spots, readings and soil tests.
+
+    The most destructive action in the app, so it requires the field's name to be
+    typed back. That is not ceremony: fields are listed side by side on the
+    Overview and the rows are small, and a misclick here would take a season of
+    readings with it.
+    """
+    form = await request.form()
+    conn = db.init_db()
+    field = db.get_field(conn, field_id)
+    if field is None:
+        conn.close()
+        return not_found(request, details, f"No field with id {field_id}.")
+
+    typed = str(form.get("confirm") or "").strip()
+    if typed != field["name"]:
+        conn.close()
+        return _back(f"/field/{field_id}/edit", details,
+                     error=f"Type the field name exactly ({field['name']}) to delete it.")
+
+    n_readings = conn.execute(
+        """SELECT COUNT(*) FROM reading
+            WHERE site_id IN (SELECT id FROM site WHERE field_id = ?)""",
+        (field_id,)).fetchone()[0]
+    with conn:
+        conn.execute("DELETE FROM field WHERE id = ?", (field_id,))
+    conn.close()
+    logger.info("Deleted field %d (%s) and %d readings", field_id, field["name"], n_readings)
+    return _back("/", details)

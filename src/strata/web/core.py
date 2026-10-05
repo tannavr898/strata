@@ -98,17 +98,51 @@ def crop_label(text: Optional[str]) -> str:
     return out
 
 
+def tidy(text: Optional[str]) -> str:
+    """Render the rule engine's plain-ASCII notation as real typography.
+
+    The engine writes `R^2` and `--` because it also prints to a terminal, where
+    those are correct. On a web page they read as unpolished, so the display
+    layer substitutes them rather than changing strings the tests and the
+    terminal report both depend on.
+    """
+    if not text:
+        return ""
+    return (str(text)
+            .replace("R^2", "R²")
+            .replace(" -- ", " — ")
+            .replace("+/-", "±"))
+
+
 templates.env.filters["crop"] = crop_label
+templates.env.filters["tidy"] = tidy
 
 
 def base_context(request: Request, details: bool) -> dict:
+    """Everything every page needs, including which sidebar item is active.
+
+    `nav` is derived from the request path rather than passed by each route, so a
+    new page cannot forget to highlight itself -- and the sidebar can never
+    disagree with the page you are actually on.
+    """
     artifacts = STATE["artifacts"]
+    path = request.url.path
+    if path.startswith("/calibration"):
+        nav = "calibration"
+    elif path.startswith("/models"):
+        nav = "models"
+    elif path == "/":
+        nav = "overview"
+    else:
+        nav = "fields"
     return {
         "request": request,
         "details": details,
+        "nav": nav,
         "artifacts": artifacts,
         "manifest": artifacts.manifest if artifacts else None,
         "stale": artifacts.is_stale() if artifacts else False,
+        "library_mismatch": artifacts.library_mismatch() if artifacts else None,
         "startup_error": STATE["error"],
     }
 

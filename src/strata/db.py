@@ -208,3 +208,39 @@ def reading_summary(conn: sqlite3.Connection, field_id: int) -> list[sqlite3.Row
         """,
         (field_id,),
     ).fetchall()
+
+
+def season_readings(conn: sqlite3.Connection, field_id: int, channel: str,
+                    year: Optional[int] = None) -> list[sqlite3.Row]:
+    """Every reading of one channel across a field, oldest first, with its site.
+
+    The season view compares SPOTS within a field, which is the comparison the
+    probe exists to make: one reading is a number, several spots over a season is
+    a picture of how water and biology move through the field.
+
+    `calibrated_value` is returned alongside `raw_value` rather than coalesced
+    here, so the caller can plot the lab-equivalent value where one exists and
+    still show which points are only raw.
+    """
+    sql = """
+        SELECT r.*, s.label AS site_label, s.id AS site_id
+          FROM reading r
+          JOIN site s ON s.id = r.site_id
+         WHERE s.field_id = ? AND r.channel = ?
+    """
+    params: list = [field_id, channel]
+    if year is not None:
+        sql += " AND substr(r.taken_at, 1, 4) = ?"
+        params.append(str(year))
+    return conn.execute(sql + " ORDER BY r.taken_at", params).fetchall()
+
+
+def reading_years(conn: sqlite3.Connection, field_id: int) -> list[str]:
+    """Distinct years this field has readings for, newest first."""
+    rows = conn.execute(
+        """SELECT DISTINCT substr(r.taken_at, 1, 4) AS y
+             FROM reading r JOIN site s ON s.id = r.site_id
+            WHERE s.field_id = ? ORDER BY y DESC""",
+        (field_id,),
+    ).fetchall()
+    return [r["y"] for r in rows]

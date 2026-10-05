@@ -11,13 +11,17 @@ what the results mean, and what the system's honest limits are.
 - **Maintenance:** this file must be updated whenever the pipeline changes. See
   [§13 Maintenance protocol](#13-maintenance-protocol) and the
   [changelog](#14-changelog).
-- **Last verified against code and data:** 2026-07-25
-- **All model results below were regenerated on 2026-07-25** on the current shipped
+- **Last verified against code and data:** 2026-09-19
+- **§6 and §10 model results were regenerated on 2026-09-19** from logged runs
+  (`docs/metrics.jsonl`; `scripts/build_models.py`, `python -m strata.yield_model`,
+  `python -m strata.main`) on the current shipped
   feature matrix — the multi-county SSURGO fix (66 counties; [§14](#14-changelog))
   **plus** the time-varying features added 2026-07-24: sub-season weather windows and
   cropland-masked MODIS NDVI ([§7](#7-the-central-finding-a-feature-information-ceiling)).
-  These numbers are produced directly by `python -m strata.yield_model` and supersede
-  every earlier figure in this document and the README.
+  These numbers match `data/models/MANIFEST.json` exactly and supersede every
+  earlier figure in this document. The 2026-07-25 run these tables used to quote
+  (e.g. corn 0.601, hay 0.408, barley 0.283) came from an earlier state of the
+  analysis table; the exact change between the two runs was not recorded.
 
 ---
 
@@ -51,7 +55,8 @@ what they grow — corn, say. They have three practical questions:
 
 Commercial precision-agriculture platforms answer these, but they are priced for
 operations running thousands of acres. Strata is an attempt to answer the same
-questions using only **free public data**, with **no hardware**, and — critically
+questions using only **free public data**, with **no hardware dependency** (the
+team's low-cost soil probe plugs in only through the calibration seam), and — critically
 — to be **honest about which answers it cannot give**.
 
 Strata is deliberately **not**:
@@ -591,14 +596,14 @@ flowchart TD
         R1["Same county can appear in<br/>BOTH train and test.<br/>Model recognizes a county by its<br/>static soil fingerprint and recalls<br/>its typical yield.<br/><b>corn R² = 0.69</b>"]
     end
     subgraph G["② Leave-counties-out (GroupKFold on FIPS) — HONEST"]
-        G1["Every test county is absent<br/>from training. This is the<br/>situation a brand-new farm presents.<br/><b>corn R² = 0.60</b>"]
+        G1["Every test county is absent<br/>from training. This is the<br/>situation a brand-new farm presents.<br/><b>corn R² = 0.61</b>"]
     end
     subgraph F["③ Forward-in-time (train ≤2017, predict 2018+) — REAL"]
         F1["Honors the arrow of time.<br/>A farmer forecasting next season<br/>only ever has the past.<br/><b>corn R² = 0.46</b>"]
     end
     R --> G --> F
-    N1["<b>0.69 → 0.60</b><br/>= the county-memorization crutch"]
-    N2["<b>0.60 → 0.46</b><br/>= the cost of true extrapolation"]
+    N1["<b>0.69 → 0.61</b><br/>= the county-memorization crutch"]
+    N2["<b>0.61 → 0.46</b><br/>= the cost of true extrapolation"]
     R -.-> N1
     G -.-> N2
     style R fill:#fdecea,stroke:#c33
@@ -609,7 +614,7 @@ flowchart TD
 **Why the random-CV number is misleading.** Soil features are county-*static*:
 every row from a county shares the same 8 soil values. Under random k-fold the
 model can identify a county by that fingerprint and recall its average yield —
-which is memorization, not agronomy. The drop from 0.69 to 0.60 quantifies how
+which is memorization, not agronomy. The drop from 0.69 to 0.61 quantifies how
 much it leans on that crutch on the *current* feature matrix.
 
 > **This is corroborated by the literature — with a nuance the new features add.**
@@ -618,8 +623,8 @@ much it leans on that crutch on the *current* feature matrix.
 > leave-one-region-out evaluation, and recommends leave-one-region-out (or spatial
 > block CV) as the default protocol. On the leaner soil-plus-season-weather matrix
 > Strata's inflation was **0.17** (0.68 → 0.51), squarely in that range. Adding the
-> generalizable time-varying features (NDVI especially) **narrows the raw gap to 0.09**
-> (0.69 → 0.60) — not because the fingerprint effect disappeared, but because a real
+> generalizable time-varying features (NDVI especially) **narrows the raw gap to 0.08**
+> (0.69 → 0.61) — not because the fingerprint effect disappeared, but because a real
 > within-county signal now lifts the *honest* score more than the optimistic one. The
 > crutch is still visible per-feature: the static soil importances roughly halve from
 > random → leave-counties-out (below), exactly where the mechanism predicts.
@@ -629,8 +634,8 @@ much it leans on that crutch on the *current* feature matrix.
 | evaluation | MAE (bu/ac) | R² |
 |---|---:|---:|
 | mean-yield baseline (held-out) | 22.8 | ~0.00 |
-| attribution, leave-counties-out (soil + weather + NDVI, no trend) | 15.3 | 0.512 |
-| **forecast, leave-counties-out (+ trend)** | **13.6** | **0.601** |
+| attribution, leave-counties-out (soil + weather + NDVI, no trend) | 15.2 | 0.525 |
+| **forecast, leave-counties-out (+ trend)** | **13.5** | **0.610** |
 | forecast, forward-in-time (train ≤2017, predict 2018+) | 14.6 | 0.461 |
 | same forward test **without** trend | 19.4 | **0.086** |
 
@@ -651,26 +656,26 @@ observation carries real within-county information.
 
 | crop | rows | counties | unit | attrib R² | forecast R² | forward R² | fcst MAE | ship? |
 |---|---:|---:|---|---:|---:|---:|---:|:--:|
-| corn_grain_yield | 1314 | 66 | BU/ACRE | 0.512 | 0.601 | 0.461 | 13.6 | ✓ |
-| oats_yield | 1089 | 61 | BU/ACRE | 0.127 | 0.166 | −0.093 | 6.3 | ✗ |
-| corn_silage_yield | 1044 | 66 | TONS/ACRE | 0.511 | 0.553 | 0.571 | 1.8 | ✓ |
-| soybean_yield | 1033 | 57 | BU/ACRE | 0.511 | 0.581 | 0.456 | 4.0 | ✓ |
-| alfalfa_hay_yield | 843 | 66 | TONS/ACRE | 0.255 | 0.254 | 0.002 | 0.4 | ✗ |
-| winter_wheat_yield | 667 | 54 | BU/ACRE | 0.177 | 0.318 | — | 6.6 | ✓ |
-| hay_yield | 567 | 66 | TONS/ACRE | 0.401 | 0.408 | — | 0.3 | ✓ |
-| barley_yield | 366 | 35 | BU/ACRE | 0.251 | 0.283 | — | 7.3 | ✗ |
+| corn_grain_yield | 1314 | 66 | BU/ACRE | 0.525 | 0.610 | 0.461 | 13.5 | ✓ |
+| oats_yield | 1089 | 61 | BU/ACRE | 0.107 | 0.142 | −0.091 | 6.4 | ✗ |
+| corn_silage_yield | 1044 | 66 | TONS/ACRE | 0.509 | 0.554 | 0.570 | 1.8 | ✓ |
+| soybean_yield | 1033 | 57 | BU/ACRE | 0.512 | 0.586 | 0.455 | 4.0 | ✓ |
+| alfalfa_hay_yield | 843 | 66 | TONS/ACRE | 0.260 | 0.268 | 0.017 | 0.4 | ✗ |
+| winter_wheat_yield | 667 | 54 | BU/ACRE | 0.186 | 0.312 | — | 6.6 | ✓ |
+| hay_yield | 567 | 66 | TONS/ACRE | 0.485 | 0.493 | — | 0.25 | ✓ |
+| barley_yield | 366 | 35 | BU/ACRE | 0.349 | 0.388 | — | 6.7 | ✓ |
 
 (— = the NASS series ends before 2018, so no forward split exists.)
 
-**Stated plainly: `oats` (0.17) and `alfalfa` (0.25) remain essentially unexplained
-by the features, and `barley` (0.28) falls just under the bar.** This is surfaced,
-not masked, and drives the product gate (§10). Note two shifts from the pre-NDVI
-figures: the headline crops' honest forecast R² rose with the time-varying features
-(corn 0.51 → 0.60, soy 0.51 → 0.58, silage 0.44 → 0.55), and **winter wheat (0.318)
-crossed the 0.30 gate**, moving from withheld to shipped. Not everything went up:
-`barley` slipped to 0.283 (0.376 → below the gate), mostly because the SSURGO fix
-added two harder, previously-missing counties to its small 35-county panel — an
-honest, expected consequence of a stricter test, not a regression to hide.
+**Stated plainly: `oats` (0.14) and `alfalfa` (0.27) remain essentially unexplained
+by the features.** This is surfaced, not masked, and drives the product gate (§10).
+Relative to the pre-NDVI figures, the headline crops' honest forecast R² rose with
+the time-varying features (corn 0.55 → 0.61, soy 0.50 → 0.59, silage 0.49 → 0.55).
+**Winter wheat (0.312) and barley (0.388) are now above the 0.30 gate.** Both had
+dropped to ~0.28 after the SSURGO fix added harder, previously missing counties.
+Barley's is the least certain number here: it has the smallest panel (35 counties),
+its series ends in 2015 so there is no forward test, and it moved from 0.283 in the
+2026-07-25 run to 0.388 now without a recorded cause (see the header note).
 
 ### Negative results (tested and rejected)
 
@@ -977,7 +982,8 @@ finer spatial resolution. That is a much stronger argument for the hardware than
 
 ### Honesty
 
-**No probe exists and no real probe data exists.** The demo fits on a
+**The probe hardware exists (the sensor suite is acquired; §9.1), but no real
+paired probe/lab data exists yet.** The demo fits on a
 clearly-labeled **synthetic** paired sample (a known gain/offset/noise applied to
 real lab values) purely to exercise the interface. Per project rule, synthetic
 output is labeled and **never** reported as a finding. It demonstrates that the
@@ -1070,10 +1076,27 @@ flowchart TD
 | soybean_yield | 0.581 | **SHIP** |
 | corn_silage_yield | 0.553 | **SHIP** |
 | hay_yield | 0.408 | **SHIP** |
-| winter_wheat_yield | 0.318 | **SHIP** (newly clears the gate) |
+| winter_wheat_yield | 0.318 | **SHIP** |
 | barley_yield | 0.283 | **WITHHOLD** |
 | alfalfa_hay_yield | 0.254 | **WITHHOLD** |
 | oats_yield | 0.166 | **WITHHOLD** |
+
+> **Regenerated 2026-10-03 under scikit-learn 1.8.0.** The three preceding rows of
+> `metrics.jsonl` were produced under 1.9.0 and reported barley 0.388 (SHIP) and
+> hay 0.493. Same analysis table (hash `923c106626a51b00`), same seed, same code —
+> only the library differs, and two builds under 1.9.0 were byte-identical to each
+> other, so this is an implementation difference rather than randomness.
+>
+> **Barley crossed the gate**, 0.388 → 0.283. The two crops that moved most are
+> the two with the fewest county-years (barley 366, hay 567, Δ 0.105 and 0.085);
+> corn on 1,314 moved 0.009, soybean on 1,033 moved 0.005. The honest reading is
+> that **a leave-counties-out estimate from a few hundred county-years is not
+> stable to a decimal place**, and a crop sitting between 0.28 and 0.39 across
+> library versions is not reliably above a 0.30 threshold. Barley is withheld.
+>
+> This is also the gate doing its job: nobody re-checked barley by hand. The
+> threshold is a constant the build re-applies, so the decision followed the
+> evidence the moment the evidence moved.
 
 The threshold of 0.30 is a **judgment call**, and the paper should present it as
 one: it is the point at which a forecast becomes usefully better than quoting the
@@ -1227,7 +1250,7 @@ gridded weather, deep architectures — achieves substantially better skill.
 Most applied ML agriculture projects — especially student and portfolio projects —
 report random k-fold cross-validation on spatially structured data. Strata
 demonstrates on real USDA data that this inflates corn yield R² — by **0.17 units
-(0.51 → 0.68)** on the soil-plus-season-weather matrix, and still **0.09 (0.60 → 0.69)**
+(0.51 → 0.68)** on the soil-plus-season-weather matrix, and still **0.08 (0.61 → 0.69)**
 on the full shipped matrix — and it identifies the precise mechanism: county-static
 soil features act as a fingerprint that lets the model recognize a county and recall
 its typical yield.
@@ -1309,7 +1332,7 @@ State this plainly in the paper:
 
 | dimension | Strata | typical published work |
 |---|---|---|
-| Predictive skill | corn LCO R² 0.60 / forward 0.46 | 0.7–0.9+ with satellite/simulation inputs |
+| Predictive skill | corn LCO R² 0.61 / forward 0.46 | 0.7–0.9+ with satellite/simulation inputs |
 | Spatial resolution | county | field or sub-field |
 | Soil classification | 0.698 (lab features only) | 0.85+ with terrain/climate covariates |
 | Inputs | ~23 features, free public data | dozens, often including commercial imagery |
@@ -1366,7 +1389,7 @@ population with no `county_ansi`, dropped one step earlier — never conflate th
 | **KSSL CEC method mixing** | NH4OAc pH 7 and sum-of-cations pH 8.2 are correlated but not identical; mixing them recovers coverage at some cost in consistency. |
 | **RandomForest cannot extrapolate `year`** | Forecasts hold near the terminal-year level rather than continuing the trend. Empirically this beat explicit detrending (§6), but it will degrade as forecasts move further past 2023. |
 | **Rule thresholds are transcribed** | Penn State AASL editions change. Every rate is labeled an estimate requiring confirmation against the current AASL report before field use. |
-| **No probe data exists** | Module D is an interface contract validated only on synthetic pairs. |
+| **No paired probe data exists yet** | The probe hardware is built, but Module D is still an interface contract validated only on synthetic pairs until real probe/lab samples are collected. |
 | **`hay`, `barley`, `alfalfa` series end early** | Their forecast R² values cannot be validated forward in time. |
 
 ---
@@ -1440,10 +1463,12 @@ print('between %.1f%%  within %.1f%%' % (100*((cm-g)**2).sum()/sst,
                                           100*((c.yield_value-cm)**2).sum()/sst))
 print('soil within-county std:', c.groupby('county_ansi')[['topsoil_ph','topsoil_om_pct']].std().max().to_dict())"
 
-# Full model results (§5, §6, §10)
+# Full model results (§5, §6, §10); the package is not installed, so put src on the path
+export PYTHONPATH=src
 python -m strata.main
 python -m strata.yield_model
 python -m strata.soil_classifier
+python scripts/build_models.py      # the §10 gate table is this build's MANIFEST.json
 
 # Figures (§10)
 python -m strata.report
@@ -1456,9 +1481,9 @@ python -m strata.report
 | §3.2 coverage counts | re-run 2026-07-25 (loaders + processed CSVs) | ✅ **verified** |
 | §4 funnel counts | re-run 2026-07-25 (`assemble.py`) | ✅ **verified** |
 | §5 classifier results | KSSL-based, unaffected by the 2026-07-24/25 work | carried forward (2026-07-20) |
-| §6 yield results | re-run 2026-07-25 (`python -m strata.yield_model`, full matrix) | ✅ **verified** |
+| §6 yield results | re-run 2026-09-19 (`python -m strata.yield_model`, logged in `docs/metrics.jsonl`) | ✅ **verified** |
 | §7 variance decomposition + ceiling ladder | re-derived 2026-07-25 | ✅ **verified independently** |
-| §10 gate table | re-run 2026-07-25 | ✅ **verified** |
+| §10 gate table | re-run 2026-09-19 (`scripts/build_models.py`, = `MANIFEST.json`) | ✅ **verified** |
 | §12.1 defect | discovered 2026-07-20, **fixed** 2026-07-25 | ✅ **resolved** |
 
 ---
@@ -1472,6 +1497,7 @@ python -m strata.report
 | 2026-08-31 | **Added data entry (§10.2).** Soil-test form, CSV reading import (long or wide, shape detected from the header, idempotent), and a calibration UI. Split `web/` into `core`/`views`/`edit`/`forms`. Three rules from §8 and §9.1 now hold at the input boundary and are tested: a blank measurement stays missing rather than becoming zero, unknown import columns are reported rather than absorbed, and a channel with no lab scale cannot be calibrated. Fixed the site page defaulting to a hardcoded channel, which rendered an empty plot captioned with a measurement the site had no data for. |
 | 2026-08-31 | **Added the serving layer and the web app (§10.1).** `artifacts.py` + `scripts/build_models.py` fit and evaluate each crop once into `data/models/`, replacing three independent recomputations of the same cross-validation; `ProductForecast` now carries MAE and dataset shape so one CV serves every caller. Added `db.py` (SQLite: fields, sites, readings, lab tests) and a FastAPI/Jinja app whose five honesty states are test-enforced. Collapsed `assemble.py`'s three copy-pasted county-year joins into one loop, verified byte-identical against the previous table. |
 | 2026-08-31 | **Added an executable test suite (§13.1)** covering the join, feature, leakage, and refusal invariants this document asserts, validated by replaying defect §12.1 against it. Fixed a stale hardcoded result in `main.py`'s closing summary (it quoted R² 0.55/0.28 while the run printed 0.61/0.46); the summary now reports the metrics the run actually produced. Added `probe.py` (§9.1), a **placeholder** channel registry and reading contract for the acquired sensor suite — conversions raise `NotImplementedError` rather than parse a guessed device format, and nothing in the pipeline imports it. |
+| 2026-09-19 | **Regenerated §6 and §10 from logged runs.** The results tables had drifted from the served build (hay 0.408 → 0.493, barley 0.283 withheld → 0.388 shipped, corn 0.601 → 0.610). Updated the probe-honesty wording (the hardware now exists; paired probe/lab data does not yet) and documented that `python -m strata.*` needs `PYTHONPATH=src`. Evaluation runs now append to `docs/metrics.jsonl`; see `docs/TECHNICAL_REPORT.md` and `docs/CHANGELOG.md`. |
 | 2026-07-25 | **Fixed defect §12.1** (multi-county SSURGO → 66 counties) and **regenerated every model number** on the current shipped matrix (soil + weather windows + NDVI). Headline corn: random 0.69 / LCO 0.60 / forward 0.46. Two narrative consequences recorded honestly: the no-trend forward forecast rose from −0.42 to +0.09 (NDVI recovers the level), and **winter wheat crossed the 0.30 product gate** (0.318, now shipped). Swept all legacy figures in §3–§12 to match. |
 
 ---

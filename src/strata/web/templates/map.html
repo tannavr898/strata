@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Map — {{ field.name }}{% endblock %}
+{% block heading %}{{ field.name }} · map{% endblock %}
+{% block topmeta %}{{ sites|length }} spot{{ '' if sites|length == 1 else 's' }}{% endblock %}
+
+{% block content %}
+<p class="crumb"><a href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">&larr; {{ field.name }}</a></p>
+
+{% if not sites %}
+  <section class="card">
+    <p class="give">No spots recorded for this field yet. Add one from the field
+      page, or import readings — spots named in a file are created automatically.</p>
+    <div class="cardlinks">
+      <a class="cardlink primary" href="/field/{{ field.id }}{% if details %}?details=true{% endif %}">Add a spot</a>
+    </div>
+  </section>
+
+{% else %}
+
+  {% if channels %}
+    <nav class="chips">
+      {% for c in channels %}
+        <a class="chip-link {% if c == channel %}on{% endif %}"
+           href="/field/{{ field.id }}/map?channel={{ c }}{% if details %}&details=true{% endif %}">
+          {{ c|replace('_',' ') }}
+        </a>
+      {% endfor %}
+    </nav>
+  {% endif %}
+
+  <section class="card">
+    {% if map.empty %}
+      <p class="give">
+        None of this field's spots have coordinates yet, so there is nothing to
+        place. Add a latitude and longitude to a spot and it will appear here.
+      </p>
+    {% else %}
+
+      <div class="charthead">
+        <div>
+          <h2>Spot layout{% if channel %} · {{ channel|replace('_',' ') }}{% endif %}</h2>
+          <p class="give">
+            Shaded by the most recent reading at each spot.
+            {% if map.lo is not none and map.hi is not none %}
+              Range {{ "%.1f"|format(map.lo) }}–{{ "%.1f"|format(map.hi) }}{% if channel_meta %} {{ channel_meta.units }}{% endif %}.
+            {% endif %}
+          </p>
+        </div>
+        {% if any_uncalibrated %}
+          <div class="tags"><span class="tag uncal">uncalibrated</span></div>
+        {% endif %}
+      </div>
+
+      <svg class="fieldmap" viewBox="0 0 {{ map.width }} {{ map.height }}"
+           role="img" aria-label="Sampling spots in {{ field.name }}, north up">
+
+        <!-- North arrow: a schematic without an orientation is a diagram. -->
+        <g class="compass" transform="translate({{ map.width - 26 }}, 26)">
+          <path d="M0,-13 L5,6 L0,2 L-5,6 Z"/>
+          <text y="19">N</text>
+        </g>
+
+        {% for s in map.sites %}
+          <g class="mapsite">
+            <circle cx="{{ s.x }}" cy="{{ s.y }}" r="13"
+                    fill="{{ s.fill if s.fill != 'transparent' else 'none' }}"
+                    class="{% if s.fill == 'transparent' %}nodata{% endif %}">
+              <title>{{ s.label }}{% if s.value is not none %} · {{ "%.2f"|format(s.value) }}{% if channel_meta %} {{ channel_meta.units }}{% endif %}{% else %} · no {{ channel|replace('_',' ') }} reading{% endif %}
+{{ "%.5f"|format(s.lat) }}, {{ "%.5f"|format(s.lon) }} · {{ s.reading_count }} readings</title>
+            </circle>
+            <text class="maplabel" x="{{ s.x }}" y="{{ s.y + 30 }}">{{ s.label }}</text>
+            {% if s.value is not none %}
+              <text class="mapvalue" x="{{ s.x }}" y="{{ s.y + 4 }}">{{ "%.0f"|format(s.value) }}</text>
+            {% endif %}
+          </g>
+        {% endfor %}
+
+        <!-- Scale bar: what makes this a map rather than a sketch. -->
+        {% if map.scale_px %}
+          <g class="scalebar" transform="translate(24, {{ map.height - 22 }})">
+            <line x1="0" y1="0" x2="{{ map.scale_px }}" y2="0"/>
+            <line x1="0" y1="-4" x2="0" y2="4"/>
+            <line x1="{{ map.scale_px }}" y1="-4" x2="{{ map.scale_px }}" y2="4"/>
+            <text x="{{ map.scale_px / 2 }}" y="-8">{{ map.scale_label }}</text>
+          </g>
+        {% endif %}
+      </svg>
+
+      {% if map.lo is not none and map.hi != map.lo %}
+        <div class="ramp">
+          <span class="ramp-end">{{ "%.1f"|format(map.lo) }}</span>
+          <span class="ramp-bar"></span>
+          <span class="ramp-end">{{ "%.1f"|format(map.hi) }}</span>
+          {% if channel_meta %}<span class="ramp-unit">{{ channel_meta.units }}</span>{% endif %}
+        </div>
+      {% endif %}
+
+      {% if map.unplaced %}
+        <p class="give">
+          Not placed, because they have no coordinates:
+          <strong>{{ map.unplaced|join(', ') }}</strong>.
+        </p>
+      {% endif %}
+
+      {# The honest limit, stated on the screen rather than only in the docs. #}
+      <p class="give hint">
+        <strong>These are measurements, not a surface.</strong> Strata shows the
+        spots where you actually sampled and does not colour the ground between
+        them. Smoothing a gradient across
+        {{ map.sites|length }} point{{ '' if map.sites|length == 1 else 's' }} would
+        be drawing rather than measuring.
+        {% if map.needs_for_surface %}
+          About {{ map.needs_for_surface }} more well-spread spot{{ '' if map.needs_for_surface == 1 else 's' }}
+          would make an interpolated map worth trusting — which is exactly what a
+          cheap probe makes affordable.
+        {% else %}
+          With this many spots an interpolated surface starts to be defensible.
+        {% endif %}
+      </p>
+    {% endif %}
+  </section>
+
+  {% if details %}
+    <div class="dev">
+      Equirectangular projection, longitude scaled by cos(latitude); one shared
+      px/m scale on both axes so the sampling geometry is not stretched. North is
+      up. Sequential ramp (one hue, light→dark) encodes magnitude — kept separate
+      from the categorical series colours, which encode identity.
+    </div>
+  {% endif %}
+
+{% endif %}
+{% endblock %}

@@ -20,9 +20,10 @@ grows**:
 ### What Strata is NOT
 - Not a "which crop to plant" classifier — farmers know their crop.
 - Not an invented "% of theoretical max yield" target.
-- Not hardware. No rover/motors/GPS/PCB code lives here. A cheap soil probe will
-  later feed in only as a **calibration layer** (`strata.calibration`); the
-  product has zero dependency on any sensor existing yet.
+- Not hardware code. The team has built a handheld soil probe (the sensor suite is
+  acquired; see `probe.py`), but no firmware, rover, motor, or PCB code lives here.
+  Probe readings enter only through CSV import and the **calibration layer**
+  (`strata.calibration`), and the product still runs end to end with no sensor at all.
 
 ---
 
@@ -95,6 +96,16 @@ cp .env.example .env        # then edit .env and set NASS_API_KEY
 
 The NASS API key is read from the environment (`NASS_API_KEY`) via `.env`, so it
 never lands in source or git history.
+
+**Put `src` on the path before running any `python -m strata.…` command.** The
+package is not pip-installed, so without this you get
+`ModuleNotFoundError: No module named 'strata'`. (`pytest` and the `scripts/` add
+it themselves.)
+
+```bash
+export PYTHONPATH=src           # bash / Git Bash
+$env:PYTHONPATH = "src"         # Windows PowerShell
+```
 
 ---
 
@@ -241,19 +252,29 @@ model never saw, which is what a new farm actually gets.
 
 | crop | LCO forecast R² | typical error | trained on | gate |
 |---|--:|--:|--:|:--|
-| corn grain | 0.610 | ±13.53 bu/acre | 1,314 county-years | ship |
-| soybean | 0.586 | ±4.01 bu/acre | 1,033 | ship |
-| corn silage | 0.554 | ±1.83 tons/acre | 1,044 | ship |
-| hay | 0.493 | ±0.25 tons/acre | 567 | ship |
-| barley | 0.388 | ±6.74 bu/acre | 366 | ship |
-| winter wheat | 0.312 | ±6.56 bu/acre | 667 | ship |
-| alfalfa hay | 0.268 | ±0.38 tons/acre | 843 | **withhold** |
-| oats | 0.142 | ±6.36 bu/acre | 1,089 | **withhold** |
+| corn grain | 0.601 | ±13.63 bu/acre | 1,314 county-years | ship |
+| soybean | 0.581 | ±3.98 bu/acre | 1,033 county-years | ship |
+| corn silage | 0.553 | ±1.81 tons/acre | 1,044 county-years | ship |
+| hay | 0.408 | ±0.27 tons/acre | 567 county-years | ship |
+| winter wheat | 0.318 | ±6.57 bu/acre | 667 county-years | ship |
+| barley | 0.283 | ±7.34 bu/acre | 366 county-years | **withhold** |
+| alfalfa hay | 0.254 | ±0.38 tons/acre | 843 county-years | **withhold** |
+| oats | 0.166 | ±6.33 bu/acre | 1,089 county-years | **withhold** |
 
 Gate: `YieldModel.PRODUCT_MIN_FORECAST_R2 = 0.30`. Below it, a forecast would be no
 better than quoting the county average, so the product declines to give one and
 says why. Research still reports every crop — withholding is a *display* decision,
 not a reason to skip the measurement.
+
+> **Barley and hay are not stable at this sample size.** Rebuilding the identical
+> analysis table (same hash, same seed, same code) under **scikit-learn 1.8.0**
+> instead of **1.9.0** moved barley from 0.388 to 0.282 — across the gate — and hay
+> from 0.493 to 0.408. The two crops that moved most are the two with the fewest
+> county-years (barley 366, hay 567); corn, on 1,314, moved 0.009. Two builds under
+> the same library were byte-identical, so this is an implementation difference, not
+> randomness. **A crop whose gate decision flips on a library upgrade is not
+> reliably above the gate**, and barley is reported as withheld accordingly. The
+> manifest now records the library version, and the app banners a mismatch.
 
 ---
 
@@ -296,15 +317,15 @@ Corn grain (1,314 county-years, 66 counties):
   attribR²→fcstR² jump is the genetic/management yield trend.
 - **The gate re-evaluates itself, in both directions.** Winter wheat and barley
   cleared it on the old 56-county data (0.33 / 0.38), *fell below* it after the
-  multi-county SSURGO fix corrected the data (both 0.28, withheld), and *rose back
-  above* it once the weather windows and NDVI were added (0.312 / 0.388, shipping
-  again). Nobody re-checked them by hand at any point — the threshold is a named
+  multi-county SSURGO fix corrected the data (both 0.28, withheld), and are back
+  above it in the current build (0.312 / 0.388, shipping; see "What the product
+  ships today"). Nobody re-checked them by hand at any point — the threshold is a named
   constant the build re-applies, so a crop's status follows the evidence rather
   than a stale decision someone made once.
 - **Product quality gate (`ship?`).** Research reports every crop; the *product*
   offers a forecast only where the honest LCO forecast R² clears a named threshold
-  (`YieldModel.PRODUCT_MIN_FORECAST_R2 = 0.30`). `oats` (0.07) and `alfalfa` (0.18)
-  fall below it and are withheld with an explicit *"insufficient model skill"*
+  (`YieldModel.PRODUCT_MIN_FORECAST_R2 = 0.30`). `oats` (0.14) and `alfalfa` (0.27)
+  fall below it in the current build and are withheld with an explicit *"insufficient model skill"*
   message rather than shipped as a number a farmer would wrongly trust.
 - **Permutation importance is computed leave-counties-out** (random vs LCO shown
   side by side). Doing so corrected an earlier reading: the old headline
@@ -498,7 +519,8 @@ and fed into the **same** recommender — nothing upstream changes.
   where genuinely new predictive signal enters.
 - **No hardware dependency.** Yield, soil, and recommendation modules all run today
   with no sensor. The probe is an *optional* accuracy layer, not a prerequisite.
-- **Honesty.** No probe or probe data exists, so the demo fits on a clearly-labeled
+- **Honesty.** The probe hardware exists, but no real paired (probe, lab) samples
+  have been collected yet, so the demo fits on a clearly-labeled
   **synthetic** paired sample (a known gain/offset/noise on real lab values) purely
   to exercise the interface. Per the project rule, synthetic output is labeled and
   never reported as a finding. Run `python -m strata.calibration`.
@@ -509,7 +531,8 @@ and fed into the **same** recommender — nothing upstream changes.
 
 Everything runs **offline** from the deterministic `data/processed/*.csv` (no API
 key or network needed once those exist; reproduce them from the provenance table
-above). The orchestrator sequences all four capabilities into one report:
+above). The orchestrator sequences all four capabilities into one report
+(with `PYTHONPATH=src` set, per Setup):
 
 ```bash
 python -m strata.main      # soil classifier -> yield model -> cited reco -> calib seam
